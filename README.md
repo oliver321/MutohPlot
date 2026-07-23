@@ -1,15 +1,27 @@
-# MutohPlot v0.0.4
+# MutohPlot v0.0.5
 
-Neu: SVG `S/s`, `T/t`, `A/a`, Sichtbarkeitsfilter, Farb-zu-Stift-Zuordnung, Plotwegoptimierung, Statistik und SVG-Vorschau.
+Zusätzlich zu v0.0.4:
+
+- Papierpresets A3, A2, A1, A0
+- Hoch-/Querformat
+- automatische Einpassung mit frei wählbarem Rand
+- strenge Seitengrenzprüfung
+- explizite Farb-zu-Stift-Zuordnung per JSON
+- Inkscape-Layernamen wie `Pen 3` oder `Stift 3` wählen automatisch den Stift
+
+## Beispiel
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-pip install pytest
-pytest
-
-mutohplot svg examples/sample_multicolor.svg output.hpgl --device-unit 0.01 --optimize --stats --preview preview.svg
+mutohplot svg drawing.svg drawing.hpgl \
+  --paper a2 \
+  --fit \
+  --margin 10 \
+  --device-unit 0.01 \
+  --pen-map examples/pen-map.json \
+  --optimize \
+  --strict-bounds \
+  --stats \
+  --preview preview.svg
 ```
 
-Die funktionierende SVG-zu-Mutoh-Transformation aus v0.0.3 wurde unverändert übernommen.
+Ohne `--fit` bleibt die bewährte 1:1-Geometrie aus v0.0.3/v0.0.4 erhalten.

@@ -29,7 +29,8 @@ def transform(s):
 def points(s):
  a=[float(v) for v in re.findall(r'[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?',s)]; return [Point(a[i],a[i+1]) for i in range(0,len(a),2)]
 class SVGReader:
- def __init__(self,curve_steps=24,pen_count=8):self.curve_steps=curve_steps;self.pen_count=pen_count;self.colors={}
+ def __init__(self,curve_steps=24,pen_count=8,pen_map=None,layer_pens=True):
+  self.curve_steps=curve_steps;self.pen_count=pen_count;self.colors={};self.pen_map={str(k).lower():int(v) for k,v in (pen_map or {}).items()};self.layer_pens=layer_pens
  def read(self,path):return self.read_text(open(path,encoding='utf-8').read())
  def read_text(self,text):
   root=ET.fromstring(text); w,h=length_mm(root.get('width')),length_mm(root.get('height')); vb=[float(v) for v in re.findall(r'[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?',root.get('viewBox') or '')]
@@ -41,12 +42,18 @@ class SVGReader:
  def visible(self,s):
   try:return s.get('display')!='none' and s.get('visibility')!='hidden' and s.get('stroke')!='none' and float(s.get('opacity','1'))!=0 and float(s.get('stroke-opacity','1'))!=0
   except ValueError:return True
- def pen(self,c):
-  c=(c or '#000000').lower()
+ def pen(self,c,layer=None):
+  c=(c or '#000000').strip().lower()
+  if layer and self.layer_pens:
+   m=re.search(r'(?:pen|stift)\s*[-_:]?\s*([1-8])',layer,re.I)
+   if m:return int(m.group(1))
+  if c in self.pen_map:return self.pen_map[c]
   if c not in self.colors:self.colors[c]=len(self.colors)%self.pen_count+1
   return self.colors[c]
- def walk(self,e,parent,inherit,doc):
-  m=parent.then(transform(e.get('transform'))); s=dict(inherit);s.update(style(e.get('style')))
+ def walk(self,e,parent,inherit,doc,layer=None):
+  m=parent.then(transform(e.get('transform'))); s=dict(inherit);s.update(style(e.get('style'))); current_layer=layer
+  label=e.get('{http://www.inkscape.org/namespaces/inkscape}label') or e.get('id')
+  if e.get('{http://www.inkscape.org/namespaces/inkscape}groupmode')=='layer':current_layer=label
   for k in ('stroke','display','visibility','opacity','stroke-opacity'):
    if e.get(k) is not None:s[k]=e.get(k)
   tag=e.tag.split('}')[-1]; polys=[]
@@ -62,6 +69,6 @@ class SVGReader:
     cx,cy=float(e.get('cx','0')),float(e.get('cy','0'));rx=float(e.get('r',e.get('rx','0')));ry=float(e.get('r',e.get('ry','0')));n=max(24,self.curve_steps);polys=[Polyline([Point(cx+rx*math.cos(2*math.pi*i/n),cy+ry*math.sin(2*math.pi*i/n)) for i in range(n+1)])]
    elif tag=='path':polys=parse_path(e.get('d',''),self.curve_steps)
   if polys:
-   pen=self.pen(s.get('stroke')); color=s.get('stroke','#000000')
+   pen=self.pen(s.get('stroke'),current_layer); color=s.get('stroke','#000000')
    for p in polys:doc.add_polyline(Polyline([m.apply(q) for q in p.points],pen,color))
-  for ch in list(e):self.walk(ch,m,s,doc)
+  for ch in list(e):self.walk(ch,m,s,doc,current_layer)

@@ -2,19 +2,31 @@
 
 Modern HPGL toolkit with native support for center-origin plotters such as the Mutoh XP-500.
 
-## Current status: v0.0.2
+## v0.0.3
 
 Implemented:
 
 - Internal geometry in millimetres
-- HPGL tokenizer
-- Stateful HPGL parser
-- `IN`, `DF`, `SP`, `PA`, `PR`, `PU`, and `PD`
-- HPGL writer using absolute coordinates
-- Mutoh XP-500 device profile
-- Configurable coordinate transformation
-- Command-line HPGL conversion
-- Unit tests
+- HPGL tokenizer, parser, and writer
+- HPGL commands: `IN`, `DF`, `SP`, `PA`, `PR`, `PU`, `PD`
+- SVG import:
+  - `line`
+  - `polyline`
+  - `polygon`
+  - `rect`
+  - `circle`
+  - `ellipse`
+  - `path` with `M`, `L`, `H`, `V`, `C`, `Q`, `Z`
+- Basic SVG transforms:
+  - `translate`
+  - `scale`
+  - `rotate`
+  - `matrix`
+- SVG page-size detection from `width`/`height` or `viewBox`
+- Automatic mapping from SVG top-left origin to Mutoh center origin
+- Configurable XP-500 coordinate resolution
+- Command-line conversion
+- Automated tests
 
 ## Installation
 
@@ -26,11 +38,20 @@ pip install pytest
 pytest
 ```
 
-## Convert HPGL
+## Convert SVG to Mutoh HPGL
 
 ```bash
-mutohplot convert input.hpgl output.hpgl   --source-unit 0.025   --device-unit 0.01
+mutohplot svg input.svg output.hpgl   --device-unit 0.01
 ```
 
-The XP-500 supports more than one coordinate resolution. Use `--device-unit`
-to select the active resolution.
+For A2 output with forced page size:
+
+```bash
+mutohplot svg input.svg output.hpgl   --page-width 420   --page-height 594   --device-unit 0.01
+```
+
+## Convert existing HPGL
+
+```bash
+mutohplot hpgl input.hpgl output.hpgl   --source-unit 0.025   --device-unit 0.01   --swap-axes
+```

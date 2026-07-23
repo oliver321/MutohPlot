@@ -3,7 +3,6 @@ from ..document import PlotDocument
 from ..geometry.point import Point
 from ..geometry.polyline import Polyline
 from .tokenizer import HPGLTokenizer
-from .tokens import Command
 
 @dataclass(slots=True)
 class PlotState:
@@ -15,25 +14,18 @@ class PlotState:
 
 class HPGLParser:
     def __init__(self, source_unit_mm: float = 0.025):
-        if source_unit_mm <= 0:
-            raise ValueError("source_unit_mm must be positive")
         self.source_unit_mm = source_unit_mm
 
     def parse_text(self, text: str) -> PlotDocument:
-        return self.parse_commands(HPGLTokenizer().tokenize(text))
-
-    def parse_commands(self, commands: list[Command]) -> PlotDocument:
+        commands = HPGLTokenizer().tokenize(text)
         state = PlotState()
-        document = PlotDocument(metadata={"source_unit_mm": self.source_unit_mm})
-        current: Polyline | None = None
+        doc = PlotDocument(metadata={"source_unit_mm": self.source_unit_mm})
+        current = None
 
-        for command in commands:
-            name = command.name
-            args = command.numeric_args
-
+        for cmd in commands:
+            name, args = cmd.name, cmd.numeric_args
             if name == "IN":
-                state = PlotState()
-                current = None
+                state, current = PlotState(), None
             elif name == "DF":
                 continue
             elif name == "SP":
@@ -43,50 +35,47 @@ class HPGLParser:
             elif name in {"PA", "PR"}:
                 state.absolute = name == "PA"
                 if args:
-                    current = self._coordinates(args, state, document, current)
+                    current = self._coords(args, state, doc, current)
             elif name == "PU":
-                state.pen_down = False
-                current = None
+                state.pen_down, current = False, None
                 if args:
-                    current = self._coordinates(args, state, document, current)
+                    current = self._coords(args, state, doc, current)
             elif name == "PD":
                 if not state.pen_down:
                     state.pen_down = True
-                    current = Polyline([self._point_mm(state)], state.pen)
-                    document.polylines.append(current)
+                    current = Polyline([self._point(state)], state.pen)
+                    doc.polylines.append(current)
                 if args:
-                    current = self._coordinates(args, state, document, current)
+                    current = self._coords(args, state, doc, current)
             else:
-                unsupported = document.metadata.setdefault("unsupported_commands", [])
-                if isinstance(unsupported, list):
-                    unsupported.append(name)
+                doc.metadata.setdefault("unsupported_commands", []).append(name)
 
-        document.polylines = [p for p in document.polylines if len(p.points) >= 2]
-        return document
+        doc.polylines = [p for p in doc.polylines if len(p.points) >= 2]
+        return doc
 
-    def _coordinates(self, args, state, document, current):
+    def _coords(self, args, state, doc, current):
         if len(args) % 2:
-            raise ValueError(f"Odd coordinate count: {args}")
+            raise ValueError("Odd coordinate count")
         for i in range(0, len(args), 2):
-            x_arg, y_arg = args[i], args[i + 1]
+            x, y = args[i], args[i+1]
             if state.absolute:
-                state.x_units, state.y_units = x_arg, y_arg
+                state.x_units, state.y_units = x, y
             else:
-                state.x_units += x_arg
-                state.y_units += y_arg
-            point = self._point_mm(state)
+                state.x_units += x
+                state.y_units += y
+            pt = self._point(state)
             if state.pen_down:
                 if current is None:
-                    current = Polyline([point], state.pen)
-                    document.polylines.append(current)
+                    current = Polyline([pt], state.pen)
+                    doc.polylines.append(current)
                 else:
-                    current.append(point)
+                    current.append(pt)
             else:
                 current = None
         return current
 
-    def _point_mm(self, state: PlotState) -> Point:
+    def _point(self, state):
         return Point(
             state.x_units * self.source_unit_mm,
-            state.y_units * self.source_unit_mm,
+            state.y_units * self.source_unit_mm
         )

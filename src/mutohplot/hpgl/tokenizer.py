@@ -3,7 +3,7 @@ from .tokens import Command
 class HPGLTokenizer:
     def tokenize(self, text: str) -> list[Command]:
         cleaned = text.replace("\r", "").replace("\n", "")
-        commands: list[Command] = []
+        commands = []
         for raw in cleaned.split(";"):
             raw = raw.strip()
             if not raw:

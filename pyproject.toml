@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mutohplot"
-version = "0.0.2"
-description = "Modern HPGL parser, transformer, and writer for vintage pen plotters"
+version = "0.0.3"
+description = "Modern HPGL and SVG toolkit for vintage pen plotters"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

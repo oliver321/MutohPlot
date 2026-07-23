@@ -1,131 +1,67 @@
-import math
-import re
-import xml.etree.ElementTree as ET
+import math,re,xml.etree.ElementTree as ET
 from ..document import PlotDocument
 from ..geometry.point import Point
 from ..geometry.polyline import Polyline
 from .matrix import Matrix
 from .path import parse_path
-
-UNIT_TO_MM = {
-    "mm": 1.0,
-    "cm": 10.0,
-    "in": 25.4,
-    "pt": 25.4/72.0,
-    "pc": 25.4/6.0,
-    "px": 25.4/96.0,
-    "": 1.0,
-}
-
-def length_mm(value: str | None) -> float | None:
-    if value is None:
-        return None
-    m = re.fullmatch(r"\s*([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)\s*([A-Za-z]*)\s*", value)
-    if not m:
-        raise ValueError(f"Invalid SVG length: {value}")
-    number, unit = float(m.group(1)), m.group(2).lower()
-    if unit not in UNIT_TO_MM:
-        raise ValueError(f"Unsupported SVG unit: {unit}")
-    return number * UNIT_TO_MM[unit]
-
-def parse_transform(text: str | None) -> Matrix:
-    if not text:
-        return Matrix()
-    result = Matrix()
-    for name, args_text in re.findall(r"([A-Za-z]+)\s*\(([^)]*)\)", text):
-        args = [float(v) for v in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", args_text)]
-        name = name.lower()
-        if name == "translate":
-            m = Matrix.translate(args[0], args[1] if len(args) > 1 else 0)
-        elif name == "scale":
-            m = Matrix.scale(args[0], args[1] if len(args) > 1 else None)
-        elif name == "rotate":
-            if len(args) == 1:
-                m = Matrix.rotate(args[0])
-            else:
-                cx, cy = args[1], args[2]
-                m = Matrix.translate(-cx,-cy).then(Matrix.rotate(args[0])).then(Matrix.translate(cx,cy))
-        elif name == "matrix" and len(args) == 6:
-            m = Matrix(*args)
-        else:
-            raise ValueError(f"Unsupported transform: {name}")
-        result = result.then(m)
-    return result
-
-def parse_points(text: str) -> list[Point]:
-    nums = [float(v) for v in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", text)]
-    if len(nums) % 2:
-        raise ValueError("Odd point count")
-    return [Point(nums[i], nums[i+1]) for i in range(0, len(nums), 2)]
-
+UNIT={'mm':1,'cm':10,'in':25.4,'pt':25.4/72,'pc':25.4/6,'px':25.4/96,'':1}
+def length_mm(v):
+ if v is None:return None
+ m=re.fullmatch(r'\s*([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)\s*([A-Za-z]*)\s*',v); return float(m.group(1))*UNIT[m.group(2).lower()]
+def style(s):
+ d={}
+ for q in (s or '').split(';'):
+  if ':' in q:k,v=q.split(':',1);d[k.strip()]=v.strip()
+ return d
+def transform(s):
+ if not s:return Matrix()
+ out=Matrix()
+ for name,arg in re.findall(r'([A-Za-z]+)\s*\(([^)]*)\)',s):
+  a=[float(v) for v in re.findall(r'[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?',arg)]; name=name.lower()
+  if name=='translate':m=Matrix.translate(a[0],a[1] if len(a)>1 else 0)
+  elif name=='scale':m=Matrix.scale(a[0],a[1] if len(a)>1 else None)
+  elif name=='rotate':
+   m=Matrix.rotate(a[0]) if len(a)==1 else Matrix.translate(-a[1],-a[2]).then(Matrix.rotate(a[0])).then(Matrix.translate(a[1],a[2]))
+  elif name=='matrix':m=Matrix(*a)
+  else:raise ValueError(name)
+  out=out.then(m)
+ return out
+def points(s):
+ a=[float(v) for v in re.findall(r'[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?',s)]; return [Point(a[i],a[i+1]) for i in range(0,len(a),2)]
 class SVGReader:
-    def __init__(self, curve_steps: int = 24):
-        self.curve_steps = curve_steps
-
-    def read(self, path: str) -> PlotDocument:
-        return self.read_text(open(path, "r", encoding="utf-8").read())
-
-    def read_text(self, text: str) -> PlotDocument:
-        root = ET.fromstring(text)
-        width = length_mm(root.get("width"))
-        height = length_mm(root.get("height"))
-        viewbox = root.get("viewBox")
-        vb = [float(v) for v in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", viewbox or "")]
-
-        if (width is None or height is None) and len(vb) == 4:
-            width = width if width is not None else vb[2]
-            height = height if height is not None else vb[3]
-
-        if width is None or height is None:
-            raise ValueError("SVG requires width/height or viewBox")
-
-        scale_x = width / vb[2] if len(vb) == 4 else 1.0
-        scale_y = height / vb[3] if len(vb) == 4 else 1.0
-        base = Matrix.scale(scale_x, scale_y)
-        if len(vb) == 4:
-            base = Matrix.translate(-vb[0], -vb[1]).then(base)
-
-        doc = PlotDocument(metadata={"page_width_mm": width, "page_height_mm": height})
-        self._walk(root, base, doc)
-        return doc
-
-    def _walk(self, elem, parent_matrix, doc):
-        local = parse_transform(elem.get("transform"))
-        matrix = parent_matrix.then(local)
-        tag = elem.tag.split("}")[-1]
-
-        polylines = []
-        if tag == "line":
-            polylines = [Polyline([
-                Point(float(elem.get("x1","0")), float(elem.get("y1","0"))),
-                Point(float(elem.get("x2","0")), float(elem.get("y2","0")))
-            ])]
-        elif tag in {"polyline", "polygon"}:
-            pts = parse_points(elem.get("points",""))
-            if tag == "polygon" and pts and pts[0] != pts[-1]:
-                pts.append(pts[0])
-            polylines = [Polyline(pts)] if len(pts) >= 2 else []
-        elif tag == "rect":
-            x,y = float(elem.get("x","0")), float(elem.get("y","0"))
-            w,h = float(elem.get("width","0")), float(elem.get("height","0"))
-            pts = [Point(x,y),Point(x+w,y),Point(x+w,y+h),Point(x,y+h),Point(x,y)]
-            polylines = [Polyline(pts)]
-        elif tag in {"circle", "ellipse"}:
-            cx,cy = float(elem.get("cx","0")), float(elem.get("cy","0"))
-            rx = float(elem.get("r", elem.get("rx","0")))
-            ry = float(elem.get("r", elem.get("ry","0")))
-            steps = max(24, self.curve_steps)
-            pts = [
-                Point(cx + rx*math.cos(2*math.pi*i/steps), cy + ry*math.sin(2*math.pi*i/steps))
-                for i in range(steps+1)
-            ]
-            polylines = [Polyline(pts)]
-        elif tag == "path":
-            polylines = parse_path(elem.get("d",""), self.curve_steps)
-
-        for poly in polylines:
-            transformed = Polyline([matrix.apply(p) for p in poly.points], pen=1)
-            doc.add_polyline(transformed)
-
-        for child in list(elem):
-            self._walk(child, matrix, doc)
+ def __init__(self,curve_steps=24,pen_count=8):self.curve_steps=curve_steps;self.pen_count=pen_count;self.colors={}
+ def read(self,path):return self.read_text(open(path,encoding='utf-8').read())
+ def read_text(self,text):
+  root=ET.fromstring(text); w,h=length_mm(root.get('width')),length_mm(root.get('height')); vb=[float(v) for v in re.findall(r'[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?',root.get('viewBox') or '')]
+  if (w is None or h is None) and len(vb)==4:w=w or vb[2];h=h or vb[3]
+  if w is None or h is None:raise ValueError('SVG requires width/height or viewBox')
+  base=Matrix.scale(w/vb[2],h/vb[3]) if len(vb)==4 else Matrix()
+  if len(vb)==4:base=Matrix.translate(-vb[0],-vb[1]).then(base)
+  self.colors={}; doc=PlotDocument(metadata={'page_width_mm':w,'page_height_mm':h,'color_to_pen':self.colors}); self.walk(root,base,{},doc); return doc
+ def visible(self,s):
+  try:return s.get('display')!='none' and s.get('visibility')!='hidden' and s.get('stroke')!='none' and float(s.get('opacity','1'))!=0 and float(s.get('stroke-opacity','1'))!=0
+  except ValueError:return True
+ def pen(self,c):
+  c=(c or '#000000').lower()
+  if c not in self.colors:self.colors[c]=len(self.colors)%self.pen_count+1
+  return self.colors[c]
+ def walk(self,e,parent,inherit,doc):
+  m=parent.then(transform(e.get('transform'))); s=dict(inherit);s.update(style(e.get('style')))
+  for k in ('stroke','display','visibility','opacity','stroke-opacity'):
+   if e.get(k) is not None:s[k]=e.get(k)
+  tag=e.tag.split('}')[-1]; polys=[]
+  if self.visible(s):
+   if tag=='line':polys=[Polyline([Point(float(e.get('x1','0')),float(e.get('y1','0'))),Point(float(e.get('x2','0')),float(e.get('y2','0')))])]
+   elif tag in ('polyline','polygon'):
+    p=points(e.get('points',''))
+    if tag=='polygon' and p and p[0]!=p[-1]:p.append(p[0])
+    if len(p)>=2:polys=[Polyline(p)]
+   elif tag=='rect':
+    x,y,w,h=map(float,(e.get('x','0'),e.get('y','0'),e.get('width','0'),e.get('height','0')));polys=[Polyline([Point(x,y),Point(x+w,y),Point(x+w,y+h),Point(x,y+h),Point(x,y)])]
+   elif tag in ('circle','ellipse'):
+    cx,cy=float(e.get('cx','0')),float(e.get('cy','0'));rx=float(e.get('r',e.get('rx','0')));ry=float(e.get('r',e.get('ry','0')));n=max(24,self.curve_steps);polys=[Polyline([Point(cx+rx*math.cos(2*math.pi*i/n),cy+ry*math.sin(2*math.pi*i/n)) for i in range(n+1)])]
+   elif tag=='path':polys=parse_path(e.get('d',''),self.curve_steps)
+  if polys:
+   pen=self.pen(s.get('stroke')); color=s.get('stroke','#000000')
+   for p in polys:doc.add_polyline(Polyline([m.apply(q) for q in p.points],pen,color))
+  for ch in list(e):self.walk(ch,m,s,doc)

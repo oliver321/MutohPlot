@@ -1,26 +1,8 @@
-# MutohPlot v0.0.8
+# MutohPlot v0.0.9
 
-MutohPlot converts SVG and HPGL for the Mutoh XP-500.
+Diese Version ergänzt Geometrieoptimierung und direkte serielle Übertragung zum Mutoh XP-500.
 
-## Main change
-
-The hard-clip centre correction is now applied automatically.
-
-For the available window modes:
-
-| Window | First-axis correction | Second-axis correction |
-|---|---:|---:|
-| norm | -10.0 mm | 0.0 mm |
-| exp | -10.0 mm | 0.0 mm |
-| type1 | -10.0 mm | 0.0 mm |
-| type3 | -7.5 mm | 0.0 mm |
-| none | 0.0 mm | 0.0 mm |
-
-This corrects the A3 Norm measurement where the plot was approximately
-10 mm too low on the paper.
-
-## Install
-
+## Installation
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -29,30 +11,27 @@ pip install pytest
 pytest
 ```
 
-## Recommended A3 calibration test
-
+## Optimierte A3-Konvertierung
 ```bash
-mutohplot calibrate calibration_a3_v008.hpgl   --window norm   --device-unit 0.01   --preview calibration_a3_v008_preview.svg   --report
+mutohplot svg drawing.svg drawing.hpgl \
+  --paper a3 --window norm --fit --margin 5 \
+  --quality normal --optimize --report --stats
+```
+Qualitätsprofile: `precise` 0,02 mm, `normal` 0,05 mm, `fast` 0,10 mm, `draft` 0,20 mm. Mit `--no-geometry-optimize` bleibt die Geometrie unverändert.
+
+Für den 1000-Zeichen-Puffer kann die HPGL-Befehlslänge begrenzt werden:
+```bash
+--max-command-chars 800
 ```
 
-Expected physical margins for the Norm hard-clip outline:
-
-- top: about 35 mm
-- bottom: about 15 mm
-- left: about 15 mm
-- right: about 15 mm
-
-Manual fine adjustment remains possible:
-
+## Serielle Schnittstelle
+Standard: 19200 Baud, 8N1, XON/XOFF an, RTS/CTS und DTR/DSR aus.
 ```bash
---offset-first -0.5
---offset-second 0.2
+mutohplot ports
+mutohplot serial-status /dev/ttyUSB0
+mutohplot send drawing.hpgl /dev/ttyUSB0 --buffer-profile large --progress
+mutohplot send drawing.hpgl /dev/ttyUSB0 --buffer-profile small --progress
 ```
+`large`: 16384-Byte-Blöcke. `small`: 512-Byte-Blöcke mit 20 ms Pause. Test ohne Senden: `--dry-run`.
 
-The automatic correction can be disabled for comparison:
-
-```bash
---no-hardclip-correction
-```
-
-A3 remains the default test format.
+A3 bleibt Standard. Die bestätigte Hard-Clip-Korrektur aus v0.0.8 ist unverändert.

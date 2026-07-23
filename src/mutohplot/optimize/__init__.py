@@ -1,2 +1,3 @@
+from .geometry import QUALITY_PROFILES, OptimizationStats, QualityProfile, optimize_geometry, point_count
 from .paths import optimize_nearest
-__all__=["optimize_nearest"]
+__all__=["QUALITY_PROFILES","OptimizationStats","QualityProfile","optimize_geometry","point_count","optimize_nearest"]

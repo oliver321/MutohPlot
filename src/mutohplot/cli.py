@@ -8,6 +8,8 @@ from .hard_clip import drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .optimize.paths import optimize_nearest
+from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
+from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_file, serial_status
 from .paper import Paper, get_paper
 from .report import check_bounds, transformation_report
 from .svg.preview import write_preview
@@ -51,6 +53,9 @@ def parser():
     svg.add_argument("--offset-second", type=float, default=0.0)
     svg.add_argument("--no-hardclip-correction", action="store_true")
     svg.add_argument("--optimize", action="store_true")
+    svg.add_argument("--quality", choices=sorted(QUALITY_PROFILES), default="normal")
+    svg.add_argument("--no-geometry-optimize", action="store_true")
+    svg.add_argument("--max-command-chars", type=int)
     svg.add_argument("--no-reverse", action="store_true")
     svg.add_argument("--stats", action="store_true")
     svg.add_argument("--report", action="store_true")
@@ -71,6 +76,28 @@ def parser():
     cal.add_argument("--preview")
     cal.add_argument("--report", action="store_true")
 
+    ports = sub.add_parser("ports")
+
+    status = sub.add_parser("serial-status")
+    status.add_argument("port")
+    status.add_argument("--baud", type=int, default=19200)
+    status.add_argument("--no-xonxoff", action="store_true")
+    status.add_argument("--rtscts", action="store_true")
+    status.add_argument("--dsrdtr", action="store_true")
+    status.add_argument("--timeout", type=float, default=3.0)
+
+    send = sub.add_parser("send")
+    send.add_argument("input")
+    send.add_argument("port")
+    send.add_argument("--baud", type=int, default=19200)
+    send.add_argument("--buffer-profile", choices=sorted(BUFFER_PROFILES), default="large")
+    send.add_argument("--no-xonxoff", action="store_true")
+    send.add_argument("--rtscts", action="store_true")
+    send.add_argument("--dsrdtr", action="store_true")
+    send.add_argument("--timeout", type=float, default=30.0)
+    send.add_argument("--progress", action="store_true")
+    send.add_argument("--dry-run", action="store_true")
+
     return p
 
 
@@ -85,6 +112,27 @@ def stats(document):
 
 def main():
     args = parser().parse_args()
+
+    if args.command == "ports":
+        items=list_serial_ports()
+        if not items: print("No serial ports found")
+        for item in items: print(f"{item['device']}: {item['description']} {item['hwid']}".strip())
+        return
+    if args.command == "serial-status":
+        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=args.timeout,write_timeout_s=args.timeout)
+        for k,v in serial_status(s).items(): print(f"{k}: {v}")
+        return
+    if args.command == "send":
+        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=args.timeout,write_timeout_s=args.timeout)
+        profile=BUFFER_PROFILES[args.buffer_profile]; size=Path(args.input).stat().st_size
+        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}")
+        if args.dry_run: print(f"Dry run: {size} bytes would be sent"); return
+        def progress(sent,total):
+            if args.progress: print(f"\rSending: {int(sent*100/total):3d}% ({sent}/{total})",end="",flush=True)
+        sent=send_file(args.input,s,args.buffer_profile,progress)
+        if args.progress: print()
+        print(f"Sent {sent} bytes")
+        return
 
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
@@ -148,12 +196,17 @@ def main():
         if args.report:
             print(transformation_report(document, paper, profile, area, args.margin, fit_scale))
 
+    if args.command == "svg" and not args.no_geometry_optimize:
+        document, gs = optimize_geometry(document, args.quality)
+        print(f"Geometry optimization: {gs.points_before} -> {gs.points_after} points ({gs.reduction_percent:.1f}% reduction, quality={args.quality})")
+
     if getattr(args, "optimize", False):
         before = document.pen_up_distance_mm()
         document = optimize_nearest(document, not args.no_reverse)
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
 
-    output = HPGLWriter(MutohXP500(unit_mm=args.device_unit), transform).write(document)
+    max_chars = args.max_command_chars if args.command == "svg" and args.max_command_chars else BUFFER_PROFILES["large"].hpgl_command_chars
+    output = HPGLWriter(MutohXP500(unit_mm=args.device_unit), transform, max_command_chars=max_chars).write(document)
     Path(args.output).write_text(output, encoding="ascii")
     print(f"Wrote {args.output}")
 

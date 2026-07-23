@@ -1,28 +1,22 @@
 from ..transform.coordinate import CoordinateTransform
-
 class HPGLWriter:
-    def __init__(self, device, transform=None):
-        self.device = device
-        self.transform = transform or CoordinateTransform.identity()
-
-    def write(self, document):
-        out = ["IN;", "DF;"]
-        current_pen = None
+    def __init__(self,device,transform=None,max_command_chars=16384):
+        self.device=device; self.transform=transform or CoordinateTransform.identity(); self.max_command_chars=max(64,int(max_command_chars))
+    def write(self,document):
+        out=["IN;","DF;","PA;"]; current_pen=None
         for poly in document.polylines:
-            if len(poly.points) < 2:
-                continue
-            if current_pen != poly.pen:
-                out.append(f"SP{poly.pen};")
-                current_pen = poly.pen
-            p0 = self.transform.apply(poly.points[0])
-            x0, y0 = self.device.mm_to_units(p0.x, p0.y)
-            out.append(f"PU{x0},{y0};")
-            coords = []
-            for p in poly.points[1:]:
-                p = self.transform.apply(p)
-                x, y = self.device.mm_to_units(p.x, p.y)
-                coords.append(f"{x},{y}")
-            out.append("PD" + ",".join(coords) + ";")
-            out.append("PU;")
-        out.extend(["PU0,0;", "SP0;", "IN;"])
-        return "".join(out)
+            if len(poly.points)<2: continue
+            if current_pen!=poly.pen: out.append(f"SP{poly.pen};"); current_pen=poly.pen
+            units=[self.device.mm_to_units(*(lambda p:(p.x,p.y))(self.transform.apply(p))) for p in poly.points]
+            out.append(f"PU{units[0][0]},{units[0][1]};")
+            self._append(out,"PD",units[1:]); out.append("PU;")
+        out.extend(["PU0,0;","SP0;","IN;"]); return ''.join(out)
+    def _append(self,out,prefix,coords):
+        cmd=prefix; first=True
+        for x,y in coords:
+            token=f"{x},{y}"; candidate=cmd+("" if first else ",")+token
+            if len(candidate)+1>self.max_command_chars and not first:
+                out.append(cmd+";"); cmd=prefix+token
+            else: cmd=candidate
+            first=False
+        if not first: out.append(cmd+";")

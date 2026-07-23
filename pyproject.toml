@@ -1,15 +1,27 @@
 [build-system]
-requires=["setuptools>=68","wheel"]
-build-backend="setuptools.build_meta"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name="mutohplot"
-version="0.0.1"
-description="Modern HPGL toolkit"
-requires-python=">=3.11"
+name = "mutohplot"
+version = "0.0.2"
+description = "Modern HPGL parser, transformer, and writer for vintage pen plotters"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Oliver F. and contributors"}]
+dependencies = []
+
+[project.scripts]
+mutohplot = "mutohplot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths=["tests"]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
-line-length=100
+line-length = 100
+target-version = "py311"

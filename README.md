@@ -1,10 +1,23 @@
-# MutohPlot v0.0.7
+# MutohPlot v0.0.8
 
 MutohPlot converts SVG and HPGL for the Mutoh XP-500.
 
 ## Main change
 
-A3 is now the default development and hardware-test format.
+The hard-clip centre correction is now applied automatically.
+
+For the available window modes:
+
+| Window | First-axis correction | Second-axis correction |
+|---|---:|---:|
+| norm | -10.0 mm | 0.0 mm |
+| exp | -10.0 mm | 0.0 mm |
+| type1 | -10.0 mm | 0.0 mm |
+| type3 | -7.5 mm | 0.0 mm |
+| none | 0.0 mm | 0.0 mm |
+
+This corrects the A3 Norm measurement where the plot was approximately
+10 mm too low on the paper.
 
 ## Install
 
@@ -16,16 +29,30 @@ pip install pytest
 pytest
 ```
 
-## A3 calibration plot
+## Recommended A3 calibration test
 
 ```bash
-mutohplot calibrate calibration_a3.hpgl   --window norm   --margin 5   --device-unit 0.01   --preview calibration_a3_preview.svg   --report
+mutohplot calibrate calibration_a3_v008.hpgl   --window norm   --device-unit 0.01   --preview calibration_a3_v008_preview.svg   --report
 ```
 
-## A3 SVG conversion
+Expected physical margins for the Norm hard-clip outline:
+
+- top: about 35 mm
+- bottom: about 15 mm
+- left: about 15 mm
+- right: about 15 mm
+
+Manual fine adjustment remains possible:
 
 ```bash
-mutohplot svg examples/a3_curves.svg curves_a3.hpgl   --fit   --margin 5   --window norm   --device-unit 0.01   --strict-bounds   --report   --preview curves_a3_preview.svg
+--offset-first -0.5
+--offset-second 0.2
 ```
 
-Available paper formats remain A3, A2, A1 and A0, but A3 is the default.
+The automatic correction can be disabled for comparison:
+
+```bash
+--no-hardclip-correction
+```
+
+A3 remains the default test format.

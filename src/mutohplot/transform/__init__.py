@@ -1,3 +1,4 @@
 from .coordinate import CoordinateTransform
-from .fit import FitResult, fit_document, apply_fit
-__all__ = ["CoordinateTransform", "FitResult", "fit_document", "apply_fit"]
+from .hard_clip import HardClipOffset, hard_clip_center_correction
+
+__all__ = ["CoordinateTransform", "HardClipOffset", "hard_clip_center_correction"]

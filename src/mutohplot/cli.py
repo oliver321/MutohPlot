@@ -13,6 +13,7 @@ from .report import check_bounds, transformation_report
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
+from .transform.hard_clip import hard_clip_center_correction
 from .transform.fit import apply_fit, fit_document_to_area
 
 
@@ -48,6 +49,7 @@ def parser():
     svg.add_argument("--curve-steps", type=int, default=24)
     svg.add_argument("--offset-first", type=float, default=0.0)
     svg.add_argument("--offset-second", type=float, default=0.0)
+    svg.add_argument("--no-hardclip-correction", action="store_true")
     svg.add_argument("--optimize", action="store_true")
     svg.add_argument("--no-reverse", action="store_true")
     svg.add_argument("--stats", action="store_true")
@@ -63,6 +65,9 @@ def parser():
     cal.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
     cal.add_argument("--margin", type=float, default=0.0)
     cal.add_argument("--device-unit", type=float, default=0.01)
+    cal.add_argument("--offset-first", type=float, default=0.0)
+    cal.add_argument("--offset-second", type=float, default=0.0)
+    cal.add_argument("--no-hardclip-correction", action="store_true")
     cal.add_argument("--preview")
     cal.add_argument("--report", action="store_true")
 
@@ -96,7 +101,15 @@ def main():
         hard = drawable_area(paper, profile, 0)
         safe = drawable_area(paper, profile, args.margin)
         document = create_a3_calibration(args.window, args.margin)
-        transform = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        correction = hard_clip_center_correction(profile)
+        auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
+        auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
+        transform = CoordinateTransform(
+            base.a, base.b, base.c, base.d,
+            base.tx + auto_first + args.offset_first,
+            base.ty + auto_second + args.offset_second,
+        )
         if args.preview:
             write_preview(document, args.preview, paper=paper, hard_clip=hard, safe_area=safe)
         if args.report:
@@ -120,10 +133,14 @@ def main():
         if args.strict_bounds and not check.inside:
             raise SystemExit(transformation_report(document, paper, profile, area, args.margin, fit_scale))
 
-        transform = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        correction = hard_clip_center_correction(profile)
+        auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
+        auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
         transform = CoordinateTransform(
-            transform.a, transform.b, transform.c, transform.d,
-            transform.tx + args.offset_first, transform.ty + args.offset_second,
+            base.a, base.b, base.c, base.d,
+            base.tx + auto_first + args.offset_first,
+            base.ty + auto_second + args.offset_second,
         )
 
         if args.preview:

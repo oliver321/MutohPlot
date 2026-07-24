@@ -22,6 +22,19 @@ mutohplot svg drawing.svg drawing.hpgl \
 ```
 Qualitätsprofile: `precise` 0,02 mm, `normal` 0,05 mm, `fast` 0,10 mm, `draft` 0,20 mm. Mit `--no-geometry-optimize` bleibt die Geometrie unverändert.
 
+Bestehende HP-GL-Dateien mit dem üblichen Ursprung unten links werden mit
+`--fit` proportional in die verfügbare Zeichenfläche eingepasst, zentriert und
+automatisch auf die Achsen des Mutoh XP-500 umgesetzt:
+
+```bash
+mutohplot hpgl input.hpgl output_mutoh.hpgl \
+  --paper a3 --window norm --fit --margin 5 --report --stats
+```
+
+Die manuellen Achsenoptionen bleiben für Konvertierungen ohne `--fit`
+verfügbar. `--offset-first` und `--offset-second` können auch zusammen mit
+`--fit` für eine zusätzliche Feinkorrektur verwendet werden.
+
 Für den 1000-Zeichen-Puffer kann die HPGL-Befehlslänge begrenzt werden:
 ```bash
 --max-command-chars 800

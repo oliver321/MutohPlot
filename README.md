@@ -2,6 +2,9 @@
 
 Diese Version ergänzt Geometrieoptimierung und direkte serielle Übertragung zum Mutoh XP-500.
 
+Der aktuelle Stand der eingelesenen HP-GL-Befehle ist unter
+[docs/hpgl-support.md](docs/hpgl-support.md) dokumentiert.
+
 ## Installation
 ```bash
 python3 -m venv .venv

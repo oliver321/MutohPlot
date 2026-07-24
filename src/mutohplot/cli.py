@@ -113,7 +113,12 @@ def parser():
     send.add_argument("--no-xonxoff", action="store_true")
     send.add_argument("--rtscts", action="store_true")
     send.add_argument("--dsrdtr", action="store_true")
-    send.add_argument("--timeout", type=float, default=30.0)
+    send.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="maximum write pause in seconds; default: wait indefinitely for XON",
+    )
     send.add_argument("--progress", action="store_true")
     send.add_argument("--dry-run", action="store_true")
 
@@ -153,9 +158,9 @@ def main():
         for k,v in serial_status(s).items(): print(f"{k}: {v}")
         return
     if args.command == "send":
-        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=args.timeout,write_timeout_s=args.timeout)
+        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=30.0,write_timeout_s=args.timeout)
         profile=BUFFER_PROFILES[args.buffer_profile]; size=Path(args.input).stat().st_size
-        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}")
+        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}, write-timeout={args.timeout if args.timeout is not None else 'unlimited'}")
         if args.dry_run: print(f"Dry run: {size} bytes would be sent"); return
         def progress(sent,total):
             if args.progress: print(f"\rSending: {int(sent*100/total):3d}% ({sent}/{total})",end="",flush=True)

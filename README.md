@@ -1,4 +1,4 @@
-# MutohPlot v0.0.9
+# MutohPlot v0.0.10
 
 Diese Version ergänzt Geometrieoptimierung und direkte serielle Übertragung zum Mutoh XP-500.
 

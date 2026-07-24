@@ -120,13 +120,24 @@ def parser():
     return p
 
 
-def stats(document):
+def stats(document, transform):
     print(f"Polylines: {len(document.polylines)}")
     print(f"Drawing distance: {document.drawing_distance_mm():.1f} mm")
     print(f"Pen-up distance: {document.pen_up_distance_mm():.1f} mm")
     if document.bounds():
         x0, y0, x1, y1 = document.bounds()
-        print(f"Bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
+        print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
+        output_points = [
+            transform.apply(point)
+            for polyline in document.polylines
+            for point in polyline.points
+        ]
+        first_values = [point.x for point in output_points]
+        second_values = [point.y for point in output_points]
+        print(
+            f"Output bounds: first={min(first_values):.2f}..{max(first_values):.2f} mm, "
+            f"second={min(second_values):.2f}..{max(second_values):.2f} mm"
+        )
 
 
 def main():
@@ -230,7 +241,7 @@ def main():
     print(f"Wrote {args.output}")
 
     if getattr(args, "stats", False):
-        stats(document)
+        stats(document, transform)
 
 
 if __name__ == "__main__":

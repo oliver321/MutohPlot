@@ -95,3 +95,21 @@ mutohplot serial-status /dev/ttyUSB0
 ```
 
 Die Beobachtungen für beide Pufferprofile vor Merge und Release-Tag im Pull Request dokumentieren.
+
+
+## XON/XOFF-Pause mit LOCAL/REMOTE testen
+
+Für diesen Test den Plotter mit dem 1000-Zeichen-Puffer zunächst auf LOCAL stellen und eine ausreichend große HP-GL-Datei senden:
+
+```bash
+mutohplot send drawing_small.hpgl /dev/ttyUSB0 --buffer-profile small --progress
+```
+
+Erwartetes Verhalten:
+
+- Der Fortschritt bleibt stehen, sobald die nachgelagerten Puffer gefüllt sind.
+- MutohPlot meldet keinen Schreib-Timeout, sondern wartet auf XON.
+- Nach dem Umschalten auf REMOTE wird dieselbe Übertragung automatisch fortgesetzt.
+- `Ctrl+C` bricht die wartende Übertragung kontrolliert ab und schließt den Port.
+
+Nur wenn ausdrücklich ein zeitlich begrenzter Schreibstillstand gewünscht ist, kann `--timeout SEKUNDEN` angegeben werden.

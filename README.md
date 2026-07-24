@@ -1,4 +1,4 @@
-# MutohPlot v0.0.10
+# MutohPlot v0.0.11
 
 Diese Version ergänzt Geometrieoptimierung und direkte serielle Übertragung zum Mutoh XP-500.
 
@@ -35,6 +35,6 @@ mutohplot serial-status /dev/ttyUSB0
 mutohplot send drawing.hpgl /dev/ttyUSB0 --buffer-profile large --progress
 mutohplot send drawing.hpgl /dev/ttyUSB0 --buffer-profile small --progress
 ```
-`large`: 16384-Byte-Blöcke. `small`: 512-Byte-Blöcke mit 20 ms Pause. Test ohne Senden: `--dry-run`.
+`large`: 16384-Byte-Blöcke. `small`: 512-Byte-Blöcke mit 20 ms Pause. Test ohne Senden: `--dry-run`. Die Übertragung kann mit `Ctrl+C` sicher abgebrochen werden; der serielle Port wird dabei geschlossen.\n\nDer vollständige Ablauf für den A3-Hardwaretest steht unter [docs/a3-serial-hardware-test.md](docs/a3-serial-hardware-test.md).
 
 A3 bleibt Standard. Die bestätigte Hard-Clip-Korrektur aus v0.0.8 ist unverändert.

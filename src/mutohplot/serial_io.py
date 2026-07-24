@@ -28,7 +28,7 @@ class SerialSettings:
     rtscts: bool = False
     dsrdtr: bool = False
     timeout_s: float = 30.0
-    write_timeout_s: float = 30.0
+    write_timeout_s: float | None = None
 
 
 class SerialTransmissionError(RuntimeError):

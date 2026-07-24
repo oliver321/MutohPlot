@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from mutohplot.devices.mutoh_xp500 import MutohXP500
 from mutohplot.hpgl.parser import HPGLParser
 from mutohplot.hpgl.writer import HPGLWriter
@@ -19,3 +21,12 @@ def test_arc_and_circle_are_written_as_mutoh_polylines():
 
     assert "SP2;PU10,0;PD7,7,0,10;PU;" in hpgl
     assert "PU25,20;PD20,25,15,20,20,15,25,20;PU;" in hpgl
+
+
+def test_libtest_fixture_parses_with_arcs_and_circles():
+    input_path = Path(__file__).parent.parent / "examples" / "libtest.hpgl"
+
+    document = HPGLParser().parse_text(input_path.read_text(errors="replace"))
+
+    assert len(document.polylines) == 25
+    assert sum(len(line.points) for line in document.polylines) == 731

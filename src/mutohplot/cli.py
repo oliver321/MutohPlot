@@ -19,7 +19,7 @@ from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
-from .transform.fit import apply_fit, fit_document_to_area
+from .transform.fit import apply_fit, fit_document_to_area, rotate_document
 from .transform.hard_clip import hard_clip_center_correction
 
 
@@ -58,6 +58,13 @@ def parser():
     hpgl.add_argument("--landscape", action="store_true")
     hpgl.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
     hpgl.add_argument("--fit", action="store_true")
+    rotation = hpgl.add_mutually_exclusive_group()
+    rotation.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0)
+    rotation.add_argument(
+        "--auto-rotate",
+        action="store_true",
+        help="rotate by 90 degrees when that produces a larger fitted drawing",
+    )
     hpgl.add_argument("--margin", type=float, default=0.0)
     hpgl.add_argument("--no-hardclip-correction", action="store_true")
     hpgl.add_argument("--report", action="store_true")
@@ -134,7 +141,7 @@ def parser():
     return p
 
 
-def stats(document, transform, original_bounds=None, fit_scale=None):
+def stats(document, transform, original_bounds=None, fit_scale=None, fit_rotation=0):
     print(f"Polylines: {len(document.polylines)}")
     print(f"Drawing distance: {document.drawing_distance_mm():.1f} mm")
     print(f"Pen-up distance: {document.pen_up_distance_mm():.1f} mm")
@@ -147,6 +154,7 @@ def stats(document, transform, original_bounds=None, fit_scale=None):
                 f"y={oy0:.2f}..{oy1:.2f} mm"
             )
             print(f"Fit scale: {fit_scale:.6f} ({fit_scale * 100:.2f}%)")
+            print(f"Fit rotation: {fit_rotation} degrees")
             print(
                 f"Fitted page bounds: x={x0:.2f}..{x1:.2f} mm, "
                 f"y={y0:.2f}..{y1:.2f} mm"
@@ -203,8 +211,11 @@ def main():
 
     hpgl_original_bounds = None
     hpgl_fit_scale = None
+    hpgl_fit_rotation = 0
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
+        if not args.fit and (args.rotate or args.auto_rotate):
+            raise SystemExit("--rotate and --auto-rotate require --fit")
         unsupported = Counter(document.metadata.get("unsupported_commands", []))
         if unsupported:
             summary = ", ".join(f"{name} ({count})" for name, count in sorted(unsupported.items()))
@@ -236,6 +247,20 @@ def main():
                 page_area.x_max_mm,
                 paper.height_mm - page_area.y_min_mm,
             )
+            hpgl_fit_rotation = args.rotate
+            if args.auto_rotate and document.bounds() is not None:
+                normal_fit = fit_document_to_area(
+                    document, area, paper.width_mm, paper.height_mm
+                )
+                rotated = rotate_document(document, 90)
+                rotated_fit = fit_document_to_area(
+                    rotated, area, paper.width_mm, paper.height_mm
+                )
+                if rotated_fit.scale > normal_fit.scale:
+                    document = rotated
+                    hpgl_fit_rotation = 90
+            elif args.rotate:
+                document = rotate_document(document, args.rotate)
             fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
             hpgl_fit_scale = fit.scale
             document = apply_fit(document, fit)
@@ -251,6 +276,7 @@ def main():
                 -paper.width_mm / 2.0 + auto_second + args.offset_second,
             )
             if args.report:
+                print(f"Fit rotation: {hpgl_fit_rotation} degrees")
                 print(
                     transformation_report(
                         document, paper, profile, area, args.margin, fit.scale
@@ -332,7 +358,13 @@ def main():
     print(f"Wrote {args.output}")
 
     if getattr(args, "stats", False):
-        stats(document, transform, hpgl_original_bounds, hpgl_fit_scale)
+        stats(
+            document,
+            transform,
+            hpgl_original_bounds,
+            hpgl_fit_scale,
+            hpgl_fit_rotation,
+        )
 
 
 if __name__ == "__main__":

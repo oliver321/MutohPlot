@@ -28,8 +28,12 @@ automatisch auf die Achsen des Mutoh XP-500 umgesetzt:
 
 ```bash
 mutohplot hpgl input.hpgl output_mutoh.hpgl \
-  --paper a3 --window norm --fit --margin 5 --report --stats
+  --paper a3 --window norm --fit --auto-rotate --margin 5 --report --stats
 ```
+
+`--auto-rotate` dreht die Zeichnung nur dann um 90 Grad, wenn sie dadurch
+größer auf die verfügbare Fläche skaliert werden kann. Eine feste Drehung ist
+mit `--rotate 90`, `--rotate 180` oder `--rotate 270` möglich.
 
 Die manuellen Achsenoptionen bleiben für Konvertierungen ohne `--fit`
 verfügbar. `--offset-first` und `--offset-second` können auch zusammen mit

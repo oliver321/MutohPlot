@@ -1,5 +1,7 @@
 import argparse
 import json
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 from .calibration import create_a3_calibration
@@ -7,20 +9,37 @@ from .devices.mutoh_xp500 import MutohXP500
 from .hard_clip import drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
-from .optimize.paths import optimize_nearest
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
-from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_file, serial_status
-from .paper import Paper, get_paper
+from .optimize.paths import optimize_nearest
+from .paper import get_paper
 from .report import check_bounds, transformation_report
+from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_file, serial_status
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
-from .transform.hard_clip import hard_clip_center_correction
 from .transform.fit import apply_fit, fit_document_to_area
+from .transform.hard_clip import hard_clip_center_correction
+
+
+def program_version() -> str:
+    try:
+        return package_version("mutohplot")
+    except PackageNotFoundError:
+        return "development"
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="mutohplot")
+    version = program_version()
+    p = argparse.ArgumentParser(
+        prog="mutohplot",
+        description=f"MutohPlot {version} - Modern HPGL and SVG toolkit for vintage pen plotters",
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {version}",
+        help="show the installed version and exit",
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     hpgl = sub.add_parser("hpgl")
@@ -76,7 +95,7 @@ def parser():
     cal.add_argument("--preview")
     cal.add_argument("--report", action="store_true")
 
-    ports = sub.add_parser("ports")
+    sub.add_parser("ports")
 
     status = sub.add_parser("serial-status")
     status.add_argument("port")

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .calibration import create_a3_calibration
 from .devices.mutoh_xp500 import MutohXP500
-from .hard_clip import drawable_area, get_hard_clip
+from .hard_clip import DrawableArea, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
@@ -52,6 +52,13 @@ def parser():
     hpgl.add_argument("--flip-second", action="store_true")
     hpgl.add_argument("--offset-first", type=float, default=0.0)
     hpgl.add_argument("--offset-second", type=float, default=0.0)
+    hpgl.add_argument("--paper", choices=["a3", "a2", "a1", "a0"], default="a3")
+    hpgl.add_argument("--landscape", action="store_true")
+    hpgl.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
+    hpgl.add_argument("--fit", action="store_true")
+    hpgl.add_argument("--margin", type=float, default=0.0)
+    hpgl.add_argument("--no-hardclip-correction", action="store_true")
+    hpgl.add_argument("--report", action="store_true")
     hpgl.add_argument("--optimize", action="store_true")
     hpgl.add_argument("--no-reverse", action="store_true")
     hpgl.add_argument("--stats", action="store_true")
@@ -113,20 +120,37 @@ def parser():
     send.add_argument("--no-xonxoff", action="store_true")
     send.add_argument("--rtscts", action="store_true")
     send.add_argument("--dsrdtr", action="store_true")
-    send.add_argument("--timeout", type=float, default=30.0)
+    send.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="maximum write pause in seconds; default: wait indefinitely for XON",
+    )
     send.add_argument("--progress", action="store_true")
     send.add_argument("--dry-run", action="store_true")
 
     return p
 
 
-def stats(document, transform):
+def stats(document, transform, original_bounds=None, fit_scale=None):
     print(f"Polylines: {len(document.polylines)}")
     print(f"Drawing distance: {document.drawing_distance_mm():.1f} mm")
     print(f"Pen-up distance: {document.pen_up_distance_mm():.1f} mm")
     if document.bounds():
         x0, y0, x1, y1 = document.bounds()
-        print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
+        if original_bounds is not None:
+            ox0, oy0, ox1, oy1 = original_bounds
+            print(
+                f"Original input bounds: x={ox0:.2f}..{ox1:.2f} mm, "
+                f"y={oy0:.2f}..{oy1:.2f} mm"
+            )
+            print(f"Fit scale: {fit_scale:.6f} ({fit_scale * 100:.2f}%)")
+            print(
+                f"Fitted page bounds: x={x0:.2f}..{x1:.2f} mm, "
+                f"y={y0:.2f}..{y1:.2f} mm"
+            )
+        else:
+            print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
         output_points = [
             transform.apply(point)
             for polyline in document.polylines
@@ -134,8 +158,9 @@ def stats(document, transform):
         ]
         first_values = [point.x for point in output_points]
         second_values = [point.y for point in output_points]
+        output_label = "Mutoh output bounds" if original_bounds is not None else "Output bounds"
         print(
-            f"Output bounds: first={min(first_values):.2f}..{max(first_values):.2f} mm, "
+            f"{output_label}: first={min(first_values):.2f}..{max(first_values):.2f} mm, "
             f"second={min(second_values):.2f}..{max(second_values):.2f} mm"
         )
 
@@ -153,25 +178,76 @@ def main():
         for k,v in serial_status(s).items(): print(f"{k}: {v}")
         return
     if args.command == "send":
-        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=args.timeout,write_timeout_s=args.timeout)
+        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=30.0,write_timeout_s=args.timeout)
         profile=BUFFER_PROFILES[args.buffer_profile]; size=Path(args.input).stat().st_size
-        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}")
+        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}, write-timeout={args.timeout if args.timeout is not None else 'unlimited'}")
         if args.dry_run: print(f"Dry run: {size} bytes would be sent"); return
         def progress(sent,total):
             if args.progress: print(f"\rSending: {int(sent*100/total):3d}% ({sent}/{total})",end="",flush=True)
-        sent=send_file(args.input,s,args.buffer_profile,progress)
-        if args.progress: print()
+        try:
+            sent = send_file(args.input, s, args.buffer_profile, progress)
+        except KeyboardInterrupt:
+            if args.progress:
+                print()
+            raise SystemExit("Transmission cancelled by user (serial port closed)")
+        except (OSError, RuntimeError) as error:
+            if args.progress:
+                print()
+            raise SystemExit(f"Transmission failed: {error}") from error
+        if args.progress:
+            print()
         print(f"Sent {sent} bytes")
         return
 
+    hpgl_original_bounds = None
+    hpgl_fit_scale = None
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
-        a, b, c, d = (0, 1, 1, 0) if args.swap_axes else (1, 0, 0, 1)
-        if args.flip_first:
-            a, b = -a, -b
-        if args.flip_second:
-            c, d = -c, -d
-        transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
+        if args.fit:
+            hpgl_original_bounds = document.bounds()
+            if args.swap_axes or args.flip_first or args.flip_second:
+                raise SystemExit(
+                    "--fit determines axis swapping and direction automatically; "
+                    "do not combine it with --swap-axes, --flip-first, or --flip-second"
+                )
+            paper = get_paper(args.paper, args.landscape)
+            profile = get_hard_clip(args.window)
+            page_area = drawable_area(paper, profile, args.margin)
+            # Conventional HP-GL coordinates start at the lower-left corner,
+            # while DrawableArea uses upper-left page coordinates.
+            area = DrawableArea(
+                page_area.x_min_mm,
+                paper.height_mm - page_area.y_max_mm,
+                page_area.x_max_mm,
+                paper.height_mm - page_area.y_min_mm,
+            )
+            fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
+            hpgl_fit_scale = fit.scale
+            document = apply_fit(document, fit)
+            correction = hard_clip_center_correction(profile)
+            auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
+            auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
+            transform = CoordinateTransform(
+                0.0,
+                -1.0,
+                1.0,
+                0.0,
+                paper.height_mm / 2.0 + auto_first + args.offset_first,
+                -paper.width_mm / 2.0 + auto_second + args.offset_second,
+            )
+            if args.report:
+                print(
+                    transformation_report(
+                        document, paper, profile, area, args.margin, fit.scale
+                    )
+                )
+        else:
+            a, b, c, d = (0, 1, 1, 0) if args.swap_axes else (1, 0, 0, 1)
+            if args.flip_first:
+                a, b = -a, -b
+            if args.flip_second:
+                c, d = -c, -d
+            transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
 
     elif args.command == "calibrate":
         paper = get_paper("a3")
@@ -241,7 +317,7 @@ def main():
     print(f"Wrote {args.output}")
 
     if getattr(args, "stats", False):
-        stats(document, transform)
+        stats(document, transform, hpgl_original_bounds, hpgl_fit_scale)
 
 
 if __name__ == "__main__":

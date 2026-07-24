@@ -94,6 +94,86 @@ def test_hpgl_fit_rejects_manual_axis_options(tmp_path, monkeypatch):
         cli.main()
 
 
+def test_hpgl_auto_rotate_uses_a3_height_for_landscape_input(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "input.hpgl"
+    output = tmp_path / "output.hpgl"
+    # A4 landscape: 297 x 210 mm.
+    source.write_text(
+        "IN;SP1;PU0,0;PD11880,0,11880,8400,0,8400,0,0;",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "hpgl",
+            str(source),
+            str(output),
+            "--paper",
+            "a3",
+            "--window",
+            "norm",
+            "--fit",
+            "--margin",
+            "5",
+            "--auto-rotate",
+            "--stats",
+        ],
+    )
+
+    cli.main()
+
+    converted = cli.HPGLParser(0.01).parse_text(output.read_text(encoding="ascii"))
+    assert converted.bounds() == pytest.approx((-180.0, -127.27, 180.0, 127.27), abs=0.02)
+    stats = capsys.readouterr().out
+    assert "Fit scale: 1.212121 (121.21%)" in stats
+    assert "Fit rotation: 90 degrees" in stats
+
+
+def test_hpgl_auto_rotate_keeps_better_orientation(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "input.hpgl"
+    output = tmp_path / "output.hpgl"
+    source.write_text("IN;SP1;PU0,0;PD8400,0,8400,11880,0,11880,0,0;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "hpgl",
+            str(source),
+            str(output),
+            "--fit",
+            "--auto-rotate",
+            "--stats",
+        ],
+    )
+
+    cli.main()
+
+    stats = capsys.readouterr().out
+    assert "Fit rotation: 0 degrees" in stats
+
+
+def test_hpgl_rotation_requires_fit(tmp_path, monkeypatch):
+    source = tmp_path / "input.hpgl"
+    source.write_text("IN;PU0,0;PD100,100;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "hpgl",
+            str(source),
+            str(tmp_path / "output.hpgl"),
+            "--rotate",
+            "90",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="require --fit"):
+        cli.main()
+
+
 def test_hpgl_warns_with_unsupported_command_counts(tmp_path, monkeypatch, capsys):
     source = tmp_path / "input.hpgl"
     source.write_text("IN;VS10;VS20;IP0,0,100,100;PU0,0;PD10,10;", encoding="ascii")

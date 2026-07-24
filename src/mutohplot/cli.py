@@ -159,8 +159,18 @@ def main():
         if args.dry_run: print(f"Dry run: {size} bytes would be sent"); return
         def progress(sent,total):
             if args.progress: print(f"\rSending: {int(sent*100/total):3d}% ({sent}/{total})",end="",flush=True)
-        sent=send_file(args.input,s,args.buffer_profile,progress)
-        if args.progress: print()
+        try:
+            sent = send_file(args.input, s, args.buffer_profile, progress)
+        except KeyboardInterrupt:
+            if args.progress:
+                print()
+            raise SystemExit("Transmission cancelled by user (serial port closed)")
+        except (OSError, RuntimeError) as error:
+            if args.progress:
+                print()
+            raise SystemExit(f"Transmission failed: {error}") from error
+        if args.progress:
+            print()
         print(f"Sent {sent} bytes")
         return
 

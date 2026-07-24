@@ -132,13 +132,25 @@ def parser():
     return p
 
 
-def stats(document, transform):
+def stats(document, transform, original_bounds=None, fit_scale=None):
     print(f"Polylines: {len(document.polylines)}")
     print(f"Drawing distance: {document.drawing_distance_mm():.1f} mm")
     print(f"Pen-up distance: {document.pen_up_distance_mm():.1f} mm")
     if document.bounds():
         x0, y0, x1, y1 = document.bounds()
-        print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
+        if original_bounds is not None:
+            ox0, oy0, ox1, oy1 = original_bounds
+            print(
+                f"Original input bounds: x={ox0:.2f}..{ox1:.2f} mm, "
+                f"y={oy0:.2f}..{oy1:.2f} mm"
+            )
+            print(f"Fit scale: {fit_scale:.6f} ({fit_scale * 100:.2f}%)")
+            print(
+                f"Fitted page bounds: x={x0:.2f}..{x1:.2f} mm, "
+                f"y={y0:.2f}..{y1:.2f} mm"
+            )
+        else:
+            print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
         output_points = [
             transform.apply(point)
             for polyline in document.polylines
@@ -146,8 +158,9 @@ def stats(document, transform):
         ]
         first_values = [point.x for point in output_points]
         second_values = [point.y for point in output_points]
+        output_label = "Mutoh output bounds" if original_bounds is not None else "Output bounds"
         print(
-            f"Output bounds: first={min(first_values):.2f}..{max(first_values):.2f} mm, "
+            f"{output_label}: first={min(first_values):.2f}..{max(first_values):.2f} mm, "
             f"second={min(second_values):.2f}..{max(second_values):.2f} mm"
         )
 
@@ -186,9 +199,12 @@ def main():
         print(f"Sent {sent} bytes")
         return
 
+    hpgl_original_bounds = None
+    hpgl_fit_scale = None
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
         if args.fit:
+            hpgl_original_bounds = document.bounds()
             if args.swap_axes or args.flip_first or args.flip_second:
                 raise SystemExit(
                     "--fit determines axis swapping and direction automatically; "
@@ -206,6 +222,7 @@ def main():
                 paper.height_mm - page_area.y_min_mm,
             )
             fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
+            hpgl_fit_scale = fit.scale
             document = apply_fit(document, fit)
             correction = hard_clip_center_correction(profile)
             auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
@@ -300,7 +317,7 @@ def main():
     print(f"Wrote {args.output}")
 
     if getattr(args, "stats", False):
-        stats(document, transform)
+        stats(document, transform, hpgl_original_bounds, hpgl_fit_scale)
 
 
 if __name__ == "__main__":

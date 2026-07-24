@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .calibration import create_a3_calibration
 from .devices.mutoh_xp500 import MutohXP500
-from .hard_clip import drawable_area, get_hard_clip
+from .hard_clip import DrawableArea, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
@@ -52,6 +52,13 @@ def parser():
     hpgl.add_argument("--flip-second", action="store_true")
     hpgl.add_argument("--offset-first", type=float, default=0.0)
     hpgl.add_argument("--offset-second", type=float, default=0.0)
+    hpgl.add_argument("--paper", choices=["a3", "a2", "a1", "a0"], default="a3")
+    hpgl.add_argument("--landscape", action="store_true")
+    hpgl.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
+    hpgl.add_argument("--fit", action="store_true")
+    hpgl.add_argument("--margin", type=float, default=0.0)
+    hpgl.add_argument("--no-hardclip-correction", action="store_true")
+    hpgl.add_argument("--report", action="store_true")
     hpgl.add_argument("--optimize", action="store_true")
     hpgl.add_argument("--no-reverse", action="store_true")
     hpgl.add_argument("--stats", action="store_true")
@@ -181,12 +188,49 @@ def main():
 
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
-        a, b, c, d = (0, 1, 1, 0) if args.swap_axes else (1, 0, 0, 1)
-        if args.flip_first:
-            a, b = -a, -b
-        if args.flip_second:
-            c, d = -c, -d
-        transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
+        if args.fit:
+            if args.swap_axes or args.flip_first or args.flip_second:
+                raise SystemExit(
+                    "--fit determines axis swapping and direction automatically; "
+                    "do not combine it with --swap-axes, --flip-first, or --flip-second"
+                )
+            paper = get_paper(args.paper, args.landscape)
+            profile = get_hard_clip(args.window)
+            page_area = drawable_area(paper, profile, args.margin)
+            # Conventional HP-GL coordinates start at the lower-left corner,
+            # while DrawableArea uses upper-left page coordinates.
+            area = DrawableArea(
+                page_area.x_min_mm,
+                paper.height_mm - page_area.y_max_mm,
+                page_area.x_max_mm,
+                paper.height_mm - page_area.y_min_mm,
+            )
+            fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
+            document = apply_fit(document, fit)
+            correction = hard_clip_center_correction(profile)
+            auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
+            auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
+            transform = CoordinateTransform(
+                0.0,
+                -1.0,
+                1.0,
+                0.0,
+                paper.height_mm / 2.0 + auto_first + args.offset_first,
+                -paper.width_mm / 2.0 + auto_second + args.offset_second,
+            )
+            if args.report:
+                print(
+                    transformation_report(
+                        document, paper, profile, area, args.margin, fit.scale
+                    )
+                )
+        else:
+            a, b, c, d = (0, 1, 1, 0) if args.swap_axes else (1, 0, 0, 1)
+            if args.flip_first:
+                a, b = -a, -b
+            if args.flip_second:
+                c, d = -c, -d
+            transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
 
     elif args.command == "calibrate":
         paper = get_paper("a3")

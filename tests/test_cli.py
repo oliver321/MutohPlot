@@ -92,3 +92,28 @@ def test_hpgl_fit_rejects_manual_axis_options(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="determines axis swapping"):
         cli.main()
+
+
+def test_stats_shows_original_bounds_fit_scale_and_mutoh_bounds(capsys):
+    document = PlotDocument([Polyline([Point(15.0, 66.5), Point(282.0, 333.5)], 1)])
+    transform = CoordinateTransform(
+        a=0.0,
+        b=-1.0,
+        c=1.0,
+        d=0.0,
+        tx=200.0,
+        ty=-148.5,
+    )
+
+    cli.stats(
+        document,
+        transform,
+        original_bounds=(63.75, 0.0, 335.5, 271.75),
+        fit_scale=267.0 / 271.75,
+    )
+
+    output = capsys.readouterr().out
+    assert "Original input bounds: x=63.75..335.50 mm, y=0.00..271.75 mm" in output
+    assert "Fit scale: 0.982521 (98.25%)" in output
+    assert "Fitted page bounds: x=15.00..282.00 mm, y=66.50..333.50 mm" in output
+    assert "Mutoh output bounds: first=-133.50..133.50 mm, second=-133.50..133.50 mm" in output

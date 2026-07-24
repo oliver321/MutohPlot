@@ -94,6 +94,22 @@ def test_hpgl_fit_rejects_manual_axis_options(tmp_path, monkeypatch):
         cli.main()
 
 
+def test_hpgl_warns_with_unsupported_command_counts(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "input.hpgl"
+    source.write_text("IN;VS10;VS20;IP0,0,100,100;PU0,0;PD10,10;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["mutohplot", "hpgl", str(source), str(tmp_path / "output.hpgl")],
+    )
+
+    cli.main()
+
+    assert (
+        "Warning: Unsupported HP-GL commands: IP (1), VS (2)"
+        in capsys.readouterr().err
+    )
+
+
 def test_stats_shows_original_bounds_fit_scale_and_mutoh_bounds(capsys):
     document = PlotDocument([Polyline([Point(15.0, 66.5), Point(282.0, 333.5)], 1)])
     transform = CoordinateTransform(

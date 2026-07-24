@@ -1,5 +1,7 @@
 import argparse
 import json
+import sys
+from collections import Counter
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -203,6 +205,19 @@ def main():
     hpgl_fit_scale = None
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
+        unsupported = Counter(document.metadata.get("unsupported_commands", []))
+        if unsupported:
+            summary = ", ".join(f"{name} ({count})" for name, count in sorted(unsupported.items()))
+            print(f"Warning: Unsupported HP-GL commands: {summary}", file=sys.stderr)
+        unsupported_characters = Counter(
+            document.metadata.get("unsupported_label_characters", [])
+        )
+        if unsupported_characters:
+            summary = ", ".join(
+                f"{character!r} ({count})"
+                for character, count in sorted(unsupported_characters.items())
+            )
+            print(f"Warning: Unsupported LB characters replaced with '?': {summary}", file=sys.stderr)
         if args.fit:
             hpgl_original_bounds = document.bounds()
             if args.swap_axes or args.flip_first or args.flip_second:

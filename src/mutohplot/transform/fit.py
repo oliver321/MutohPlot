@@ -116,3 +116,32 @@ def apply_fit(document: PlotDocument, fit: FitResult) -> PlotDocument:
         }
     )
     return PlotDocument(polylines, metadata)
+
+
+def rotate_document(document: PlotDocument, angle_deg: int) -> PlotDocument:
+    """Rotate plot geometry counter-clockwise in 90-degree steps."""
+
+    angle = angle_deg % 360
+    if angle not in (0, 90, 180, 270):
+        raise ValueError("Rotation must be 0, 90, 180, or 270 degrees")
+
+    def rotate(point: Point) -> Point:
+        if angle == 90:
+            return Point(-point.y, point.x)
+        if angle == 180:
+            return Point(-point.x, -point.y)
+        if angle == 270:
+            return Point(point.y, -point.x)
+        return point
+
+    polylines = [
+        Polyline(
+            [rotate(point) for point in poly.points],
+            poly.pen,
+            poly.source_color,
+        )
+        for poly in document.polylines
+    ]
+    metadata = dict(document.metadata)
+    metadata["rotation_deg"] = angle
+    return PlotDocument(polylines, metadata)

@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from math import ceil, cos, radians, sin
+from math import ceil, cos, hypot, radians, sin
 
 from ..document import PlotDocument
 from ..geometry.point import Point
 from ..geometry.polyline import Polyline
+from .stroke_font import glyph_rows
 from .tokenizer import HPGLTokenizer
 
 
@@ -14,6 +15,10 @@ class PlotState:
     absolute: bool = True
     pen_down: bool = False
     pen: int = 1
+    char_width_mm: float = 2.85
+    char_height_mm: float = 3.75
+    label_direction_x: float = 1.0
+    label_direction_y: float = 0.0
 
 class HPGLParser:
     def __init__(self, source_unit_mm: float = 0.025):
@@ -58,6 +63,29 @@ class HPGLParser:
                 current = self._arc(name, cmd.numeric_args, state, doc, current)
             elif name == "CI":
                 current = self._circle(cmd.numeric_args, state, doc)
+            elif name == "SI":
+                args = cmd.numeric_args
+                if not args:
+                    state.char_width_mm, state.char_height_mm = 2.85, 3.75
+                elif len(args) == 2:
+                    state.char_width_mm = abs(args[0]) * 10.0
+                    state.char_height_mm = abs(args[1]) * 10.0
+                else:
+                    raise ValueError("SI requires width and height")
+            elif name in {"DI", "DR"}:
+                args = cmd.numeric_args
+                if not args:
+                    state.label_direction_x, state.label_direction_y = 1.0, 0.0
+                elif len(args) == 2:
+                    length = hypot(args[0], args[1])
+                    if length == 0:
+                        raise ValueError(f"{name} direction vector must not be zero")
+                    state.label_direction_x = args[0] / length
+                    state.label_direction_y = args[1] / length
+                else:
+                    raise ValueError(f"{name} requires run and rise")
+            elif name == "LB":
+                current = self._label(cmd.payload, state, doc)
             else:
                 doc.metadata.setdefault("unsupported_commands", []).append(name)
 
@@ -156,6 +184,77 @@ class HPGLParser:
             x_units * self.source_unit_mm,
             y_units * self.source_unit_mm,
         )
+
+    def _label(self, text, state, doc):
+        # Approximate the HP-GL default label cell. Labels are converted to
+        # ordinary polylines so all later fit/axis transforms remain valid.
+        cell_width_mm = state.char_width_mm
+        cell_height_mm = state.char_height_mm
+        column_mm = cell_width_mm / 5.0
+        row_mm = cell_height_mm / 7.0
+        origin_x_mm = state.x_units * self.source_unit_mm
+        baseline_y_mm = state.y_units * self.source_unit_mm
+        direction_x = state.label_direction_x
+        direction_y = state.label_direction_y
+        perpendicular_x = -direction_y
+        perpendicular_y = direction_x
+
+        missing = doc.metadata.setdefault("unsupported_label_characters", [])
+        cursor_mm = 0.0
+        line_offset_mm = 0.0
+        for character in text:
+            if character == "\n":
+                cursor_mm = 0.0
+                line_offset_mm -= cell_height_mm * 1.4
+                continue
+            rows, supported = glyph_rows(character)
+            if not supported:
+                missing.append(character)
+            for row, bits in enumerate(rows):
+                column = 0
+                while column < 5:
+                    if bits[column] == "0":
+                        column += 1
+                        continue
+                    start = column
+                    while column + 1 < 5 and bits[column + 1] == "1":
+                        column += 1
+                    start_along_mm = cursor_mm + start * column_mm
+                    end_along_mm = cursor_mm + (column + 1) * column_mm
+                    across_mm = line_offset_mm + (6 - row) * row_mm
+                    doc.polylines.append(
+                        Polyline(
+                            [
+                                Point(
+                                    origin_x_mm
+                                    + direction_x * start_along_mm
+                                    + perpendicular_x * across_mm,
+                                    baseline_y_mm
+                                    + direction_y * start_along_mm
+                                    + perpendicular_y * across_mm,
+                                ),
+                                Point(
+                                    origin_x_mm
+                                    + direction_x * end_along_mm
+                                    + perpendicular_x * across_mm,
+                                    baseline_y_mm
+                                    + direction_y * end_along_mm
+                                    + perpendicular_y * across_mm,
+                                ),
+                            ],
+                            state.pen,
+                        )
+                    )
+                    column += 1
+            cursor_mm += cell_width_mm * 1.2
+
+        state.x_units = (
+            origin_x_mm + direction_x * cursor_mm + perpendicular_x * line_offset_mm
+        ) / self.source_unit_mm
+        state.y_units = (
+            baseline_y_mm + direction_y * cursor_mm + perpendicular_y * line_offset_mm
+        ) / self.source_unit_mm
+        return None
 
     @staticmethod
     def _chord_angle(value):

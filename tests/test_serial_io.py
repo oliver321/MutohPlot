@@ -114,3 +114,7 @@ def test_keyboard_interrupt_closes_port():
             sleeper=lambda _: None,
         )
     assert fake.closed
+
+
+def test_default_write_timeout_allows_indefinite_xoff_pause():
+    assert SerialSettings("/dev/fake").write_timeout_s is None

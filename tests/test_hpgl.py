@@ -23,10 +23,11 @@ def test_arc_and_circle_are_written_as_mutoh_polylines():
     assert "PU25,20;PD20,25,15,20,20,15,25,20;PU;" in hpgl
 
 
-def test_libtest_fixture_parses_with_arcs_and_circles():
+def test_libtest_fixture_parses_arcs_circles_and_labels():
     input_path = Path(__file__).parent.parent / "examples" / "libtest.hpgl"
 
     document = HPGLParser().parse_text(input_path.read_text(errors="replace"))
 
-    assert len(document.polylines) == 25
-    assert sum(len(line.points) for line in document.polylines) == 731
+    assert len(document.polylines) == 289
+    assert sum(len(line.points) for line in document.polylines) == 1259
+    assert document.metadata.get("unsupported_commands") is None

@@ -19,13 +19,37 @@ def test_relative_mode():
     ]
 
 
-def test_unsupported_text_command_is_reported_without_numeric_parsing():
+def test_label_is_converted_to_polylines_and_advances_position():
     doc = HPGLParser(1.0).parse_text(
-        "IN;PA0,0;LBBristol Hackspace;PD10,0;PU;"
+        "IN;PA0,0;LBAB\x03;PD10,0;PU;"
     )
 
-    assert doc.metadata["unsupported_commands"] == ["LB"]
-    assert [(p.x, p.y) for p in doc.polylines[0].points] == [(0.0, 0.0), (10.0, 0.0)]
+    assert doc.metadata.get("unsupported_commands") is None
+    assert len(doc.polylines) > 2
+    assert doc.polylines[-1].points[0].x == pytest.approx(6.84)
+    assert (doc.polylines[-1].points[-1].x, doc.polylines[-1].points[-1].y) == (
+        10.0,
+        0.0,
+    )
+
+
+def test_unsupported_commands_are_collected_for_reporting():
+    doc = HPGLParser(1.0).parse_text("IN;VS10;VS20;IP0,0,100,100;")
+
+    assert doc.metadata["unsupported_commands"] == ["VS", "VS", "IP"]
+
+
+def test_label_honours_absolute_size_and_direction():
+    doc = HPGLParser(1.0).parse_text(
+        "IN;PA10,20;SI0.5,1;DI0,1;LBA\x03;PD10,30;PU;"
+    )
+
+    assert doc.metadata.get("unsupported_commands") is None
+    assert doc.bounds() == pytest.approx((10.0 / 7.0, 20.0, 10.0, 30.0))
+    assert [(point.x, point.y) for point in doc.polylines[-1].points] == [
+        (10.0, 26.0),
+        (10.0, 30.0),
+    ]
 
 
 def test_arc_absolute_uses_chord_angle_and_updates_position():

@@ -1,6 +1,7 @@
-# MutohPlot v0.0.11
+# MutohPlot v0.0.13
 
-Diese Version ergänzt Geometrieoptimierung und direkte serielle Übertragung zum Mutoh XP-500.
+MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
+Mutoh XP-500.
 
 Der aktuelle Stand der eingelesenen HP-GL-Befehle ist unter
 [docs/hpgl-support.md](docs/hpgl-support.md) dokumentiert.
@@ -28,12 +29,28 @@ automatisch auf die Achsen des Mutoh XP-500 umgesetzt:
 
 ```bash
 mutohplot hpgl input.hpgl output_mutoh.hpgl \
-  --paper a3 --window norm --fit --auto-rotate --margin 5 --report --stats
+  --paper a3 --window norm --fit --auto-rotate --margin 5 \
+  --preview preview.svg --report --stats
 ```
 
 `--auto-rotate` dreht die Zeichnung nur dann um 90 Grad, wenn sie dadurch
 größer auf die verfügbare Fläche skaliert werden kann. Eine feste Drehung ist
 mit `--rotate 90`, `--rotate 180` oder `--rotate 270` möglich.
+
+Die SVG-Vorschau zeigt Blattkante, Hard-Clip-Bereich, Sicherheitsrand,
+Stiftfarben und den Nullpunkt des XP-500 in der Blattmitte.
+
+## HP-GL vor dem Plotten prüfen
+
+```bash
+mutohplot inspect input.hpgl
+mutohplot inspect input.hpgl --strict
+```
+
+`inspect` meldet die vorkommenden Befehle, nicht unterstützte Befehle,
+verwendete Stifte, Grenzen, Größe sowie Zeichen- und Leerweg. `--strict`
+beendet die Prüfung mit Status 2, wenn nicht unterstützte Befehle oder
+Zeichen in `LB`-Beschriftungen gefunden werden.
 
 Die manuellen Achsenoptionen bleiben für Konvertierungen ohne `--fit`
 verfügbar. `--offset-first` und `--offset-second` können auch zusammen mit

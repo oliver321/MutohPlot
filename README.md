@@ -37,6 +37,22 @@ mutohplot hpgl input.hpgl output_mutoh.hpgl \
 größer auf die verfügbare Fläche skaliert werden kann. Eine feste Drehung ist
 mit `--rotate 90`, `--rotate 180` oder `--rotate 270` möglich.
 
+Gefüllte `RA`-Rechtecke berücksichtigen die tatsächliche Stiftbreite und den
+mit `--fit` berechneten Maßstab. Voreingestellt sind Stift 1 mit 0,5 mm und
+Stift 3 mit 0,3 mm; andere Stifte verwenden zunächst 0,5 mm. Die Zuordnung
+kann pro Aufruf wiederholt überschrieben werden:
+
+```bash
+mutohplot plot input.hpgl /dev/ttyUSB0 \
+  --paper a3 --window norm --fit --auto-rotate --margin 5 \
+  --pen-width 1=0.5 --pen-width 3=0.3
+```
+
+Unterstützte Breiten sind 0,3, 0,5, 0,7, 1,0 und 1,5 mm. Mit
+`--default-pen-width` wird der Rückfallwert für nicht ausdrücklich
+zugeordnete Stifte gesetzt. Der Linienabstand der Füllung beträgt höchstens
+85 Prozent der jeweiligen Stiftbreite auf dem Papier.
+
 Die SVG-Vorschau zeigt Blattkante, Hard-Clip-Bereich, Sicherheitsrand,
 Stiftfarben und den Nullpunkt des XP-500 in der Blattmitte.
 
@@ -54,7 +70,7 @@ beendet die Prüfung mit Status 2, wenn nicht unterstützte Befehle oder
 Zeichen in `LB`-Beschriftungen gefunden werden.
 
 Unterstützte HP-GL-Befehle sind derzeit `IN`, `DF`, `SP`, `PA`, `PR`, `PU`,
-`PD`, `AA`, `AR`, `CI`, `SI`, `DI`, `DR`, `SL`, `CP` und `LB`. Numerische
+`PD`, `AA`, `AR`, `CI`, `EA`, `RA`, `SI`, `DI`, `DR`, `SL`, `CP` und `LB`. Numerische
 Befehle werden auch erkannt, wenn zwischen zwei Befehlskennungen kein
 Semikolon steht, beispielsweise `PA100,400DR0,1`.
 

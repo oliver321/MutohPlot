@@ -208,6 +208,22 @@ def test_fill_rectangle_absolute_uses_dense_serpentine_and_restores_position():
     ) <= HPGLParser.SOLID_FILL_SPACING_MM
 
 
+def test_fill_rectangle_uses_spacing_for_active_pen():
+    doc = HPGLParser(
+        1.0,
+        solid_fill_spacing_mm_by_pen={3: 0.2},
+    ).parse_text("IN;SP3;PA0,0;RA1,1;")
+
+    fill = doc.polylines[0]
+    row_positions = sorted({round(point.y, 6) for point in fill.points})
+    assert len(row_positions) == 6
+    assert max(
+        upper - lower
+        for lower, upper in zip(row_positions, row_positions[1:])
+    ) <= 0.2 + 1e-9
+    assert doc.metadata["ra_pens"] == [3]
+
+
 @pytest.mark.parametrize("command", ["EA;", "EA1;", "EA1,2,3;", "RA;", "RA1;"])
 def test_absolute_rectangle_commands_require_one_coordinate_pair(command):
     with pytest.raises(ValueError):

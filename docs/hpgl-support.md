@@ -29,8 +29,10 @@ selects absolute character size; `DI` and `DR` select writing direction.
 cells without drawing.
 
 `EA` draws a closed rectangle outline. `RA` converts the default solid fill to
-a continuous serpentine path with at most 0.3 mm between adjacent strokes.
-Both commands restore the original pen position and up/down state.
+a continuous serpentine path. For conversion, the stroke spacing is calculated
+from the active `SP` pen, its configured physical width, and the `--fit` scale,
+so the spacing on paper is at most 85 percent of the pen width. Both commands
+restore the original pen position and up/down state.
 
 ## Not yet interpreted
 

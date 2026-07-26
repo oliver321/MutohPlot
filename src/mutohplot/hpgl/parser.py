@@ -26,8 +26,13 @@ class PlotState:
 class HPGLParser:
     SOLID_FILL_SPACING_MM = 0.3
 
-    def __init__(self, source_unit_mm: float = 0.025):
+    def __init__(
+        self,
+        source_unit_mm: float = 0.025,
+        solid_fill_spacing_mm_by_pen: dict[int, float] | None = None,
+    ):
         self.source_unit_mm = source_unit_mm
+        self.solid_fill_spacing_mm_by_pen = solid_fill_spacing_mm_by_pen or {}
 
     def parse_text(self, text: str) -> PlotDocument:
         commands = HPGLTokenizer().tokenize(text)
@@ -78,6 +83,8 @@ class HPGLParser:
             elif name == "CI":
                 current = self._circle(cmd.numeric_args, state, doc)
             elif name in {"EA", "RA"}:
+                if name == "RA":
+                    doc.metadata.setdefault("ra_pens", []).append(state.pen)
                 current = self._rectangle(name, cmd.numeric_args, state, doc)
             elif name == "SI":
                 args = cmd.numeric_args
@@ -282,11 +289,16 @@ class HPGLParser:
                 self._point_from_units(start_x_units, start_y_units),
             ]
         else:
+            spacing_mm = self.solid_fill_spacing_mm_by_pen.get(
+                state.pen,
+                self.SOLID_FILL_SPACING_MM,
+            )
             points = self._solid_rectangle_points(
                 start_x_units,
                 start_y_units,
                 opposite_x_units,
                 opposite_y_units,
+                spacing_mm,
             )
 
         doc.polylines.append(Polyline(points, state.pen))
@@ -299,7 +311,17 @@ class HPGLParser:
             return current
         return None
 
-    def _solid_rectangle_points(self, x1_units, y1_units, x2_units, y2_units):
+    def _solid_rectangle_points(
+        self,
+        x1_units,
+        y1_units,
+        x2_units,
+        y2_units,
+        spacing_mm,
+    ):
+        if spacing_mm <= 0:
+            raise ValueError("RA fill spacing must be greater than zero")
+
         x1_mm = x1_units * self.source_unit_mm
         y1_mm = y1_units * self.source_unit_mm
         x2_mm = x2_units * self.source_unit_mm
@@ -312,7 +334,7 @@ class HPGLParser:
 
         points = []
         if width_mm >= height_mm:
-            rows = max(1, ceil(height_mm / self.SOLID_FILL_SPACING_MM))
+            rows = max(1, ceil(height_mm / spacing_mm))
             for row in range(rows + 1):
                 y_mm = y1_mm + (y2_mm - y1_mm) * row / rows
                 start_x_mm, end_x_mm = (
@@ -320,7 +342,7 @@ class HPGLParser:
                 )
                 points.extend([Point(start_x_mm, y_mm), Point(end_x_mm, y_mm)])
         else:
-            columns = max(1, ceil(width_mm / self.SOLID_FILL_SPACING_MM))
+            columns = max(1, ceil(width_mm / spacing_mm))
             for column in range(columns + 1):
                 x_mm = x1_mm + (x2_mm - x1_mm) * column / columns
                 start_y_mm, end_y_mm = (

@@ -34,6 +34,12 @@ from .transform.fit import apply_fit, fit_document_to_area, rotate_document
 from .transform.hard_clip import hard_clip_center_correction
 
 
+SUPPORTED_PEN_WIDTHS_MM = (0.3, 0.5, 0.7, 1.0, 1.5)
+DEFAULT_PEN_WIDTH_MM = 0.5
+DEFAULT_PEN_WIDTHS_MM = {1: 0.5, 3: 0.3}
+RA_FILL_SPACING_FACTOR = 0.85
+
+
 def program_version() -> str:
     try:
         return package_version("mutohplot")
@@ -82,6 +88,7 @@ def parser():
     hpgl.add_argument("--optimize", action="store_true")
     hpgl.add_argument("--no-reverse", action="store_true")
     hpgl.add_argument("--stats", action="store_true")
+    add_pen_width_arguments(hpgl)
     hpgl.add_argument(
         "--preview",
         help="write an SVG preview with paper, clip areas, pens, and plotter origin",
@@ -185,6 +192,7 @@ def parser():
     plot.add_argument("--no-reverse", action="store_true")
     plot.add_argument("--report", action="store_true")
     plot.add_argument("--stats", action="store_true")
+    add_pen_width_arguments(plot)
     plot.add_argument("--preview", help="single SVG path, or output directory in batch mode")
     save = plot.add_mutually_exclusive_group()
     save.add_argument("--save-hpgl", help="save converted HP-GL (single input only)")
@@ -205,6 +213,81 @@ def parser():
     plot.add_argument("--dry-run", action="store_true")
 
     return p
+
+
+def pen_width(value: str) -> tuple[int, float]:
+    try:
+        pen_text, width_text = value.split("=", 1)
+        pen = int(pen_text)
+        width = float(width_text)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            "expected PEN=MM, for example 1=0.5"
+        ) from error
+    if not 1 <= pen <= 8:
+        raise argparse.ArgumentTypeError("pen number must be between 1 and 8")
+    if width not in SUPPORTED_PEN_WIDTHS_MM:
+        choices = ", ".join(f"{item:g}" for item in SUPPORTED_PEN_WIDTHS_MM)
+        raise argparse.ArgumentTypeError(
+            f"pen width must be one of: {choices} mm"
+        )
+    return pen, width
+
+
+def add_pen_width_arguments(command_parser) -> None:
+    command_parser.add_argument(
+        "--pen-width",
+        action="append",
+        type=pen_width,
+        metavar="PEN=MM",
+        default=[],
+        help=(
+            "physical pen width for RA fills; repeat as needed "
+            "(default: pen 1=0.5 mm, pen 3=0.3 mm)"
+        ),
+    )
+    command_parser.add_argument(
+        "--default-pen-width",
+        type=float,
+        choices=SUPPORTED_PEN_WIDTHS_MM,
+        default=DEFAULT_PEN_WIDTH_MM,
+        metavar="MM",
+        help="physical width for pens without an explicit mapping (default: 0.5)",
+    )
+
+
+def configured_pen_widths(args) -> dict[int, float]:
+    widths = dict(DEFAULT_PEN_WIDTHS_MM)
+    widths.update(dict(args.pen_width))
+    return widths
+
+
+def ra_fill_spacings(args, fit_scale: float = 1.0) -> dict[int, float]:
+    if fit_scale <= 0:
+        raise ValueError("Fit scale must be greater than zero")
+    widths = configured_pen_widths(args)
+    return {
+        pen: width * RA_FILL_SPACING_FACTOR / fit_scale
+        for pen, width in widths.items()
+    } | {
+        pen: args.default_pen_width * RA_FILL_SPACING_FACTOR / fit_scale
+        for pen in range(1, 9)
+        if pen not in widths
+    }
+
+
+def report_ra_fill(document, args) -> None:
+    ra_pens = sorted(set(document.metadata.get("ra_pens", [])))
+    if not ra_pens:
+        return
+    widths = configured_pen_widths(args)
+    for pen in ra_pens:
+        width = widths.get(pen, args.default_pen_width)
+        spacing = width * RA_FILL_SPACING_FACTOR
+        print(
+            f"RA fill: pen {pen}, width={width:.1f} mm, "
+            f"paper spacing<={spacing:.3f} mm"
+        )
 
 
 def stats(document, transform, original_bounds=None, fit_scale=None, fit_rotation=0):
@@ -336,9 +419,12 @@ def expand_inputs(pattern):
 
 
 def convert_hpgl(args, input_path, preview_path=None):
-    document = HPGLParser(args.source_unit).parse_text(
-        Path(input_path).read_text(errors="replace")
-    )
+    source_text = Path(input_path).read_text(errors="replace")
+    initial_fill_spacings = None if args.fit else ra_fill_spacings(args)
+    document = HPGLParser(
+        args.source_unit,
+        initial_fill_spacings,
+    ).parse_text(source_text)
     paper = get_paper(args.paper, args.landscape)
     profile = get_hard_clip(args.window)
     hard = drawable_area(paper, profile, 0)
@@ -396,6 +482,19 @@ def convert_hpgl(args, input_path, preview_path=None):
         elif args.rotate:
             document = rotate_document(document, args.rotate)
         fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
+        if "RA" in document.metadata["hpgl_commands"]:
+            document = HPGLParser(
+                args.source_unit,
+                ra_fill_spacings(args, fit.scale),
+            ).parse_text(source_text)
+            if fit_rotation:
+                document = rotate_document(document, fit_rotation)
+            fit = fit_document_to_area(
+                document,
+                area,
+                paper.width_mm,
+                paper.height_mm,
+            )
         fit_scale = fit.scale
         document = apply_fit(document, fit)
         correction = hard_clip_center_correction(profile)
@@ -411,6 +510,7 @@ def convert_hpgl(args, input_path, preview_path=None):
         )
         if args.report:
             print(f"Fit rotation: {fit_rotation} degrees")
+            report_ra_fill(document, args)
             print(
                 transformation_report(
                     document, paper, profile, area, args.margin, fit.scale
@@ -426,6 +526,8 @@ def convert_hpgl(args, input_path, preview_path=None):
         transform = CoordinateTransform(
             a, b, c, d, args.offset_first, args.offset_second
         )
+        if args.report:
+            report_ra_fill(document, args)
 
     if preview_path:
         if args.fit:

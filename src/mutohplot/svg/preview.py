@@ -1,7 +1,14 @@
 from xml.sax.saxutils import escape
 
 
-def write_preview(document, path, paper=None, hard_clip=None, safe_area=None):
+def write_preview(
+    document,
+    path,
+    paper=None,
+    hard_clip=None,
+    safe_area=None,
+    show_origin=False,
+):
     width = float(document.metadata.get("page_width_mm", paper.width_mm if paper else 100))
     height = float(document.metadata.get("page_height_mm", paper.height_mm if paper else 100))
     lines = [
@@ -24,6 +31,19 @@ def write_preview(document, path, paper=None, hard_clip=None, safe_area=None):
             f'<rect x="{safe_area.x_min_mm}" y="{safe_area.y_min_mm}" '
             f'width="{safe_area.width_mm}" height="{safe_area.height_mm}" '
             'fill="none" stroke="#268" stroke-width="0.5" stroke-dasharray="2 2"/>'
+        )
+    if show_origin and paper is not None:
+        x = paper.width_mm / 2.0
+        y = paper.height_mm / 2.0
+        lines.extend(
+            [
+                f'<line x1="{x - 4}" y1="{y}" x2="{x + 4}" y2="{y}" '
+                'stroke="#7a3db8" stroke-width="0.5"/>',
+                f'<line x1="{x}" y1="{y - 4}" x2="{x}" y2="{y + 4}" '
+                'stroke="#7a3db8" stroke-width="0.5"/>',
+                f'<circle cx="{x}" cy="{y}" r="1.2" fill="none" '
+                'stroke="#7a3db8" stroke-width="0.4"/>',
+            ]
         )
     palette = ["#000000", "#d22", "#268", "#282", "#a2a", "#d80", "#088", "#555"]
     for poly in document.polylines:

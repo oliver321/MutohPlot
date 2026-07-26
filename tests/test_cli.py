@@ -94,6 +94,81 @@ def test_hpgl_fit_rejects_manual_axis_options(tmp_path, monkeypatch):
         cli.main()
 
 
+def test_pen_width_option_validates_pen_and_supported_width():
+    parsed = cli.parser().parse_args(
+        ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "3=0.3"]
+    )
+    assert parsed.pen_width == [(3, 0.3)]
+
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(
+            ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "9=0.5"]
+        )
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(
+            ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "1=0.4"]
+        )
+
+
+def test_repeated_pen_width_uses_last_value_and_default_for_other_pens():
+    args = cli.parser().parse_args(
+        [
+            "hpgl",
+            "input.hpgl",
+            "output.hpgl",
+            "--pen-width",
+            "1=0.5",
+            "--pen-width",
+            "1=0.7",
+            "--default-pen-width",
+            "1.0",
+        ]
+    )
+
+    spacings = cli.ra_fill_spacings(args)
+
+    assert spacings[1] == pytest.approx(0.7 * 0.85)
+    assert spacings[3] == pytest.approx(0.3 * 0.85)
+    assert spacings[2] == pytest.approx(1.0 * 0.85)
+
+
+def test_fitted_ra_spacing_uses_physical_width_of_active_pen(tmp_path, capsys):
+    source = tmp_path / "input.hpgl"
+    source.write_text(
+        "IN;SP1;PA0,0;RA10,10;SP3;PA20,0;RA30,10;",
+        encoding="ascii",
+    )
+    args = cli.parser().parse_args(
+        [
+            "hpgl",
+            str(source),
+            str(tmp_path / "output.hpgl"),
+            "--source-unit",
+            "1",
+            "--fit",
+            "--report",
+        ]
+    )
+
+    _, document, _, _, scale, _ = cli.convert_hpgl(args, source)
+
+    assert scale == pytest.approx(267.0 / 30.0)
+    expected_spacing = {1: 0.5 * 0.85, 3: 0.3 * 0.85}
+    for pen, maximum in expected_spacing.items():
+        fill = next(polyline for polyline in document.polylines if polyline.pen == pen)
+        row_positions = sorted({round(point.y, 8) for point in fill.points})
+        largest_gap = max(
+            upper - lower
+            for lower, upper in zip(row_positions, row_positions[1:])
+        )
+        assert largest_gap <= maximum + 1e-8
+        assert largest_gap > maximum * 0.95
+
+    report = capsys.readouterr().out
+    assert "RA fill: pen 1, width=0.5 mm, paper spacing<=0.425 mm" in report
+    assert "RA fill: pen 3, width=0.3 mm, paper spacing<=0.255 mm" in report
+
+
 def test_hpgl_auto_rotate_uses_a3_height_for_landscape_input(
     tmp_path, monkeypatch, capsys
 ):
@@ -241,6 +316,17 @@ def test_inspect_accepts_quoted_wildcard(tmp_path, monkeypatch, capsys):
     assert "Input1.hpgl" in output
     assert "Input2.hpgl" in output
     assert output.count("Polylines: 1") == 2
+
+
+def test_inspect_parse_error_identifies_input_file(tmp_path, monkeypatch):
+    source = tmp_path / "broken.hpgl"
+    source.write_text("IN;PU0,not-a-number;", encoding="ascii")
+    monkeypatch.setattr("sys.argv", ["mutohplot", "inspect", str(source)])
+
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    assert f"Failed to inspect {source}:" in str(error.value)
 
 
 def test_plot_no_send_saves_converted_hpgl_and_preview(

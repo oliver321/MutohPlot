@@ -11,7 +11,8 @@ configured Mutoh XP-500 coordinate transform.
 | Linear motion | `PA`, `PR`, `PU`, `PD` | Absolute and relative movement with current pen state |
 | Arcs | `AA`, `AR` | Absolute or relative centre, positive/negative sweep, optional chord angle |
 | Circles | `CI` | Automatic pen-down circle, signed radius start point, optional chord angle |
-| Labels | `LB`, `SI`, `DI`, `DR` | Built-in 5x7 vector font, size and direction |
+| Rectangles | `EA`, `RA` | Absolute outlined rectangles and solid serpentine fills |
+| Labels | `LB`, `SI`, `DI`, `DR`, `SL`, `CP` | Built-in 5x7 vector font, size, direction, slant, and cursor movement |
 
 `AA` and `AR` update the current pen position even when the pen is up. `CI`
 draws a closed polyline and restores the previous pen state and centre
@@ -24,6 +25,14 @@ coordinate conversion, optimisation, and bounds checks also apply to text.
 The built-in font covers printable ASCII letters, digits, and common
 punctuation. Lowercase letters currently use their uppercase glyphs. `SI`
 selects absolute character size; `DI` and `DR` select writing direction.
+`SL` shears subsequent labels, and `CP` moves the pen in character and line
+cells without drawing.
+
+`EA` draws a closed rectangle outline. `RA` converts the default solid fill to
+a continuous serpentine path. For conversion, the stroke spacing is calculated
+from the active `SP` pen, its configured physical width, and the `--fit` scale,
+so the spacing on paper is at most 85 percent of the pen width. Both commands
+restore the original pen position and up/down state.
 
 ## Not yet interpreted
 
@@ -42,4 +51,4 @@ the preview shows the fitted drawing in paper coordinates together with the
 paper edge, hard-clip area, safety margin, pen colours, and the XP-500 origin.
 
 The next compatibility block is additional label state (`DT`, `SR`),
-followed by rectangles and scaling (`EA`, `ER`, `RA`, `RR`, `IP`, `IR`, `SC`).
+followed by relative rectangles and scaling (`ER`, `RR`, `IP`, `IR`, `SC`).

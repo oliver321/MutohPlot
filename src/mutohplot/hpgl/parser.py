@@ -27,7 +27,12 @@ class HPGLParser:
     def parse_text(self, text: str) -> PlotDocument:
         commands = HPGLTokenizer().tokenize(text)
         state = PlotState()
-        doc = PlotDocument(metadata={"source_unit_mm": self.source_unit_mm})
+        doc = PlotDocument(
+            metadata={
+                "source_unit_mm": self.source_unit_mm,
+                "hpgl_commands": [command.name for command in commands],
+            }
+        )
         current = None
 
         for cmd in commands:

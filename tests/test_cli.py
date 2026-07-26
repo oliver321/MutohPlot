@@ -190,6 +190,83 @@ def test_hpgl_warns_with_unsupported_command_counts(tmp_path, monkeypatch, capsy
     )
 
 
+def test_inspect_reports_commands_pens_geometry_and_unsupported(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "input.hpgl"
+    source.write_text(
+        "IN;SP2;PU0,0;PD400,0,400,200;VS10;VS20;",
+        encoding="ascii",
+    )
+    monkeypatch.setattr("sys.argv", ["mutohplot", "inspect", str(source)])
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "Commands: IN (1), SP (1), PU (1), PD (1), VS (2)" in output
+    assert "Unsupported: VS (2)" in output
+    assert "Pens used: 2" in output
+    assert "Polylines: 1" in output
+    assert "Size: 10.00 x 5.00 mm" in output
+    assert "Drawing distance: 15.0 mm" in output
+
+
+def test_inspect_strict_exits_with_status_2_for_unsupported_command(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "input.hpgl"
+    source.write_text("IN;VS10;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv", ["mutohplot", "inspect", str(source), "--strict"]
+    )
+
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    assert error.value.code == 2
+    assert "Unsupported: VS (1)" in capsys.readouterr().out
+
+
+def test_hpgl_preview_contains_a3_areas_origin_and_fitted_geometry(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "input.hpgl"
+    output = tmp_path / "output.hpgl"
+    preview = tmp_path / "preview.svg"
+    source.write_text(
+        "IN;SP2;PU0,0;PD11880,0,11880,8400,0,8400,0,0;",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "hpgl",
+            str(source),
+            str(output),
+            "--fit",
+            "--auto-rotate",
+            "--margin",
+            "5",
+            "--preview",
+            str(preview),
+        ],
+    )
+
+    cli.main()
+
+    svg = preview.read_text(encoding="utf-8")
+    assert 'width="297.0mm" height="420.0mm"' in svg
+    assert 'x="15.0" y="35.0" width="267.0" height="370.0"' in svg
+    assert 'x="20.0" y="40.0" width="257.0" height="360.0"' in svg
+    assert '<circle cx="148.5" cy="210.0"' in svg
+    assert 'stroke="#d22"' in svg
+    assert "21.2273" in svg
+    assert "275.7727" in svg
+    assert "40.0000" in svg
+    assert "400.0000" in svg
+
+
 def test_stats_shows_original_bounds_fit_scale_and_mutoh_bounds(capsys):
     document = PlotDocument([Polyline([Point(15.0, 66.5), Point(282.0, 333.5)], 1)])
     transform = CoordinateTransform(

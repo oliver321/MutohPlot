@@ -1,4 +1,4 @@
-# MutohPlot v0.0.15
+# MutohPlot v0.0.16
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.

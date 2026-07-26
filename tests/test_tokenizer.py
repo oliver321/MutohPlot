@@ -19,3 +19,19 @@ def test_label_accepts_legacy_semicolon_terminator():
 
     assert commands[0].name == "LB"
     assert commands[0].payload == "Bristol Hackspace"
+
+
+def test_numeric_commands_may_omit_semicolon_between_mnemonics():
+    commands = HPGLTokenizer().tokenize("INSP1PU0,0PA100,400DR0,1LBText\x03PD;")
+
+    assert [command.name for command in commands] == [
+        "IN",
+        "SP",
+        "PU",
+        "PA",
+        "DR",
+        "LB",
+        "PD",
+    ]
+    assert commands[3].numeric_args == [100.0, 400.0]
+    assert commands[4].numeric_args == [0.0, 1.0]

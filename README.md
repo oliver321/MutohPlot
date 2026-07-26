@@ -53,6 +53,11 @@ verwendete Stifte, Grenzen, Größe sowie Zeichen- und Leerweg. `--strict`
 beendet die Prüfung mit Status 2, wenn nicht unterstützte Befehle oder
 Zeichen in `LB`-Beschriftungen gefunden werden.
 
+Unterstützte HP-GL-Befehle sind derzeit `IN`, `DF`, `SP`, `PA`, `PR`, `PU`,
+`PD`, `AA`, `AR`, `CI`, `SI`, `DI`, `DR`, `SL`, `CP` und `LB`. Numerische
+Befehle werden auch erkannt, wenn zwischen zwei Befehlskennungen kein
+Semikolon steht, beispielsweise `PA100,400DR0,1`.
+
 ## Konvertieren und direkt plotten
 
 `plot` verarbeitet HP-GL mit denselben A3-Einstellungen wie `hpgl` und sendet

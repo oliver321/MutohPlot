@@ -19,6 +19,9 @@ class PlotState:
     char_height_mm: float = 3.75
     label_direction_x: float = 1.0
     label_direction_y: float = 0.0
+    char_slant: float = 0.0
+    carriage_return_x_units: float = 0.0
+    carriage_return_y_units: float = 0.0
 
 class HPGLParser:
     def __init__(self, source_unit_mm: float = 0.025):
@@ -51,11 +54,13 @@ class HPGLParser:
                 state.absolute = name == "PA"
                 if args:
                     current = self._coords(args, state, doc, current)
+                    self._set_carriage_return(state)
             elif name == "PU":
                 args = cmd.numeric_args
                 state.pen_down, current = False, None
                 if args:
                     current = self._coords(args, state, doc, current)
+                    self._set_carriage_return(state)
             elif name == "PD":
                 args = cmd.numeric_args
                 if not state.pen_down:
@@ -64,8 +69,10 @@ class HPGLParser:
                     doc.polylines.append(current)
                 if args:
                     current = self._coords(args, state, doc, current)
+                    self._set_carriage_return(state)
             elif name in {"AA", "AR"}:
                 current = self._arc(name, cmd.numeric_args, state, doc, current)
+                self._set_carriage_return(state)
             elif name == "CI":
                 current = self._circle(cmd.numeric_args, state, doc)
             elif name == "SI":
@@ -77,6 +84,14 @@ class HPGLParser:
                     state.char_height_mm = abs(args[1]) * 10.0
                 else:
                     raise ValueError("SI requires width and height")
+            elif name == "SL":
+                args = cmd.numeric_args
+                if not args:
+                    state.char_slant = 0.0
+                elif len(args) == 1:
+                    state.char_slant = args[0]
+                else:
+                    raise ValueError("SL requires zero or one parameter")
             elif name in {"DI", "DR"}:
                 args = cmd.numeric_args
                 if not args:
@@ -89,6 +104,9 @@ class HPGLParser:
                     state.label_direction_y = args[1] / length
                 else:
                     raise ValueError(f"{name} requires run and rise")
+                self._set_carriage_return(state)
+            elif name == "CP":
+                current = self._character_plot(cmd.numeric_args, state, doc)
             elif name == "LB":
                 current = self._label(cmd.payload, state, doc)
             else:
@@ -117,6 +135,65 @@ class HPGLParser:
             else:
                 current = None
         return current
+
+    def _character_plot(self, args, state, doc):
+        if not args:
+            spaces, lines = 0.0, -1.0
+            from_carriage_return = True
+        elif len(args) == 2:
+            spaces, lines = args
+            from_carriage_return = False
+        else:
+            raise ValueError("CP requires spaces and lines, or no parameters")
+
+        direction_x = state.label_direction_x
+        direction_y = state.label_direction_y
+        perpendicular_x = -direction_y
+        perpendicular_y = direction_x
+        space_mm = spaces * self._character_advance_mm(state)
+        line_mm = lines * self._line_advance_mm(state)
+
+        if from_carriage_return:
+            x_mm = state.carriage_return_x_units * self.source_unit_mm
+            y_mm = state.carriage_return_y_units * self.source_unit_mm
+        else:
+            x_mm = state.x_units * self.source_unit_mm
+            y_mm = state.y_units * self.source_unit_mm
+
+        x_mm += direction_x * space_mm + perpendicular_x * line_mm
+        y_mm += direction_y * space_mm + perpendicular_y * line_mm
+        state.x_units = x_mm / self.source_unit_mm
+        state.y_units = y_mm / self.source_unit_mm
+
+        if lines:
+            carriage_x_mm = (
+                state.carriage_return_x_units * self.source_unit_mm
+                + perpendicular_x * line_mm
+            )
+            carriage_y_mm = (
+                state.carriage_return_y_units * self.source_unit_mm
+                + perpendicular_y * line_mm
+            )
+            state.carriage_return_x_units = carriage_x_mm / self.source_unit_mm
+            state.carriage_return_y_units = carriage_y_mm / self.source_unit_mm
+        if state.pen_down:
+            current = Polyline([self._point(state)], state.pen)
+            doc.polylines.append(current)
+            return current
+        return None
+
+    @staticmethod
+    def _character_advance_mm(state):
+        return state.char_width_mm * 1.2
+
+    @staticmethod
+    def _line_advance_mm(state):
+        return state.char_height_mm * 1.4
+
+    @staticmethod
+    def _set_carriage_return(state):
+        state.carriage_return_x_units = state.x_units
+        state.carriage_return_y_units = state.y_units
 
     def _point(self, state):
         return Point(
@@ -226,24 +303,30 @@ class HPGLParser:
                         column += 1
                     start_along_mm = cursor_mm + start * column_mm
                     end_along_mm = cursor_mm + (column + 1) * column_mm
-                    across_mm = line_offset_mm + (6 - row) * row_mm
+                    glyph_across_mm = (6 - row) * row_mm
+                    across_mm = line_offset_mm + glyph_across_mm
+                    slant_offset_mm = state.char_slant * glyph_across_mm
                     doc.polylines.append(
                         Polyline(
                             [
                                 Point(
                                     origin_x_mm
-                                    + direction_x * start_along_mm
+                                    + direction_x
+                                    * (start_along_mm + slant_offset_mm)
                                     + perpendicular_x * across_mm,
                                     baseline_y_mm
-                                    + direction_y * start_along_mm
+                                    + direction_y
+                                    * (start_along_mm + slant_offset_mm)
                                     + perpendicular_y * across_mm,
                                 ),
                                 Point(
                                     origin_x_mm
-                                    + direction_x * end_along_mm
+                                    + direction_x
+                                    * (end_along_mm + slant_offset_mm)
                                     + perpendicular_x * across_mm,
                                     baseline_y_mm
-                                    + direction_y * end_along_mm
+                                    + direction_y
+                                    * (end_along_mm + slant_offset_mm)
                                     + perpendicular_y * across_mm,
                                 ),
                             ],
@@ -251,7 +334,7 @@ class HPGLParser:
                         )
                     )
                     column += 1
-            cursor_mm += cell_width_mm * 1.2
+            cursor_mm += self._character_advance_mm(state)
 
         state.x_units = (
             origin_x_mm + direction_x * cursor_mm + perpendicular_x * line_offset_mm

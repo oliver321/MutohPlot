@@ -58,6 +58,49 @@ def test_label_honours_absolute_size_and_direction():
     ]
 
 
+def test_character_slant_shears_label_and_resets_without_parameters():
+    upright = HPGLParser(1.0).parse_text("IN;SI0.5,1;SL;LBA\x03")
+    slanted = HPGLParser(1.0).parse_text("IN;SI0.5,1;SL0.5;LBA\x03")
+
+    assert slanted.metadata.get("unsupported_commands") is None
+    assert slanted.polylines[0].points[0].x == pytest.approx(
+        upright.polylines[0].points[0].x + 30.0 / 7.0
+    )
+    assert slanted.polylines[0].points[0].y == pytest.approx(
+        upright.polylines[0].points[0].y
+    )
+
+
+def test_character_plot_moves_in_character_cells_and_preserves_pen_state():
+    doc = HPGLParser(1.0).parse_text(
+        "IN;PA10,20;SI0.5,1;PD;CP2,1;PD30,40;PU;"
+    )
+
+    assert doc.metadata.get("unsupported_commands") is None
+    assert [(point.x, point.y) for point in doc.polylines[-1].points] == [
+        (22.0, 34.0),
+        (30.0, 40.0),
+    ]
+
+
+def test_character_plot_without_parameters_returns_and_advances_one_line():
+    doc = HPGLParser(1.0).parse_text(
+        "IN;PA10,20;SI0.5,1;LBA\x03;CP;PD20,20;PU;"
+    )
+
+    assert doc.metadata.get("unsupported_commands") is None
+    assert [(point.x, point.y) for point in doc.polylines[-1].points] == [
+        (10.0, 6.0),
+        (20.0, 20.0),
+    ]
+
+
+@pytest.mark.parametrize("command", ["SL1,2;", "CP1;"])
+def test_character_commands_reject_invalid_parameter_counts(command):
+    with pytest.raises(ValueError):
+        HPGLParser(1.0).parse_text(f"IN;{command}")
+
+
 def test_arc_absolute_uses_chord_angle_and_updates_position():
     doc = HPGLParser(1.0).parse_text(
         "IN;SP2;PU10,0;PD;AA0,0,90,45;PD0,20;PU;"

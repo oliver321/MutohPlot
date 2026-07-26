@@ -39,6 +39,12 @@ def test_unsupported_commands_are_collected_for_reporting():
     assert doc.metadata["unsupported_commands"] == ["VS", "VS", "IP"]
 
 
+def test_all_tokenized_commands_are_recorded_in_source_order():
+    doc = HPGLParser().parse_text("IN;SP2;PU0,0;PD10,10;VS5;")
+
+    assert doc.metadata["hpgl_commands"] == ["IN", "SP", "PU", "PD", "VS"]
+
+
 def test_label_honours_absolute_size_and_direction():
     doc = HPGLParser(1.0).parse_text(
         "IN;PA10,20;SI0.5,1;DI0,1;LBA\x03;PD10,30;PU;"

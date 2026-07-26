@@ -24,6 +24,8 @@ class PlotState:
     carriage_return_y_units: float = 0.0
 
 class HPGLParser:
+    SOLID_FILL_SPACING_MM = 0.3
+
     def __init__(self, source_unit_mm: float = 0.025):
         self.source_unit_mm = source_unit_mm
 
@@ -75,6 +77,8 @@ class HPGLParser:
                 self._set_carriage_return(state)
             elif name == "CI":
                 current = self._circle(cmd.numeric_args, state, doc)
+            elif name in {"EA", "RA"}:
+                current = self._rectangle(name, cmd.numeric_args, state, doc)
             elif name == "SI":
                 args = cmd.numeric_args
                 if not args:
@@ -260,6 +264,70 @@ class HPGLParser:
             doc.polylines.append(current)
             return current
         return None
+
+    def _rectangle(self, name, args, state, doc):
+        if len(args) != 2:
+            raise ValueError(f"{name} requires the opposite corner")
+
+        start_x_units = state.x_units
+        start_y_units = state.y_units
+        opposite_x_units, opposite_y_units = args
+
+        if name == "EA":
+            points = [
+                self._point_from_units(start_x_units, start_y_units),
+                self._point_from_units(opposite_x_units, start_y_units),
+                self._point_from_units(opposite_x_units, opposite_y_units),
+                self._point_from_units(start_x_units, opposite_y_units),
+                self._point_from_units(start_x_units, start_y_units),
+            ]
+        else:
+            points = self._solid_rectangle_points(
+                start_x_units,
+                start_y_units,
+                opposite_x_units,
+                opposite_y_units,
+            )
+
+        doc.polylines.append(Polyline(points, state.pen))
+
+        # EA and RA perform an automatic pen-down, then restore both the
+        # original location and the previous pen status.
+        if state.pen_down:
+            current = Polyline([self._point(state)], state.pen)
+            doc.polylines.append(current)
+            return current
+        return None
+
+    def _solid_rectangle_points(self, x1_units, y1_units, x2_units, y2_units):
+        x1_mm = x1_units * self.source_unit_mm
+        y1_mm = y1_units * self.source_unit_mm
+        x2_mm = x2_units * self.source_unit_mm
+        y2_mm = y2_units * self.source_unit_mm
+        width_mm = abs(x2_mm - x1_mm)
+        height_mm = abs(y2_mm - y1_mm)
+
+        if width_mm == 0.0 or height_mm == 0.0:
+            return [Point(x1_mm, y1_mm), Point(x2_mm, y2_mm)]
+
+        points = []
+        if width_mm >= height_mm:
+            rows = max(1, ceil(height_mm / self.SOLID_FILL_SPACING_MM))
+            for row in range(rows + 1):
+                y_mm = y1_mm + (y2_mm - y1_mm) * row / rows
+                start_x_mm, end_x_mm = (
+                    (x1_mm, x2_mm) if row % 2 == 0 else (x2_mm, x1_mm)
+                )
+                points.extend([Point(start_x_mm, y_mm), Point(end_x_mm, y_mm)])
+        else:
+            columns = max(1, ceil(width_mm / self.SOLID_FILL_SPACING_MM))
+            for column in range(columns + 1):
+                x_mm = x1_mm + (x2_mm - x1_mm) * column / columns
+                start_y_mm, end_y_mm = (
+                    (y1_mm, y2_mm) if column % 2 == 0 else (y2_mm, y1_mm)
+                )
+                points.extend([Point(x_mm, start_y_mm), Point(x_mm, end_y_mm)])
+        return points
 
     def _point_from_units(self, x_units, y_units):
         return Point(

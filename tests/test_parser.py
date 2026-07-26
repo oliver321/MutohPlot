@@ -163,6 +163,57 @@ def test_negative_circle_radius_starts_at_180_degrees():
     assert circle.points[0].y == pytest.approx(6.0)
 
 
+def test_edge_rectangle_absolute_draws_outline_and_restores_position_and_pen():
+    doc = HPGLParser(1.0).parse_text(
+        "IN;SP2;PA10,20;PD;EA30,50;PD40,20;PU;"
+    )
+
+    rectangle, line = doc.polylines
+    assert doc.metadata.get("unsupported_commands") is None
+    assert rectangle.pen == 2
+    assert [(point.x, point.y) for point in rectangle.points] == [
+        (10.0, 20.0),
+        (30.0, 20.0),
+        (30.0, 50.0),
+        (10.0, 50.0),
+        (10.0, 20.0),
+    ]
+    assert [(point.x, point.y) for point in line.points] == [
+        (10.0, 20.0),
+        (40.0, 20.0),
+    ]
+
+
+def test_fill_rectangle_absolute_uses_dense_serpentine_and_restores_position():
+    doc = HPGLParser(1.0).parse_text(
+        "IN;PA1,2;RA2,2.5;PD3,2;PU;"
+    )
+
+    fill, line = doc.polylines
+    assert doc.metadata.get("unsupported_commands") is None
+    assert (fill.points[0].x, fill.points[0].y) == pytest.approx((1.0, 2.0))
+    assert (fill.points[-1].x, fill.points[-1].y) == pytest.approx((2.0, 2.5))
+    assert doc.bounds() == pytest.approx((1.0, 2.0, 3.0, 2.5))
+    assert [(point.x, point.y) for point in line.points] == [
+        (1.0, 2.0),
+        (3.0, 2.0),
+    ]
+    row_positions = {round(point.y, 6) for point in fill.points}
+    assert max(
+        upper - lower
+        for lower, upper in zip(
+            sorted(row_positions),
+            sorted(row_positions)[1:],
+        )
+    ) <= HPGLParser.SOLID_FILL_SPACING_MM
+
+
+@pytest.mark.parametrize("command", ["EA;", "EA1;", "EA1,2,3;", "RA;", "RA1;"])
+def test_absolute_rectangle_commands_require_one_coordinate_pair(command):
+    with pytest.raises(ValueError):
+        HPGLParser(1.0).parse_text(f"IN;{command}")
+
+
 @pytest.mark.parametrize("command", ["AA0,0;", "AA0,0,90,5,1;", "CI;", "CI1,5,2;"])
 def test_arc_commands_reject_invalid_parameter_counts(command):
     with pytest.raises(ValueError):

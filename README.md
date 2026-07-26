@@ -5,6 +5,9 @@ Mutoh XP-500.
 
 Der aktuelle Stand der eingelesenen HP-GL-Befehle ist unter
 [docs/hpgl-support.md](docs/hpgl-support.md) dokumentiert.
+Stiftgruppen, Breiten, Farben, Typen und vorbereitete
+Geschwindigkeitswerte sind unter
+[docs/configuration.md](docs/configuration.md) beschrieben.
 
 ## Installation
 ```bash
@@ -38,20 +41,20 @@ größer auf die verfügbare Fläche skaliert werden kann. Eine feste Drehung is
 mit `--rotate 90`, `--rotate 180` oder `--rotate 270` möglich.
 
 Gefüllte `RA`-Rechtecke berücksichtigen die tatsächliche Stiftbreite und den
-mit `--fit` berechneten Maßstab. Voreingestellt sind Stift 1 mit 0,5 mm und
-Stift 3 mit 0,3 mm; andere Stifte verwenden zunächst 0,5 mm. Die Zuordnung
-kann pro Aufruf wiederholt überschrieben werden:
+mit `--fit` berechneten Maßstab. MutohPlot lädt dafür verpflichtend die
+mitinstallierte `Standard.toml`. Darin bilden Stift 1 und 2 die
+0,5-mm-Bleistiftgruppe, Stift 3 und 4 die 0,3-mm-Bleistiftgruppe. Ein anderes
+vollständiges Profil wird mit `--config` gewählt:
 
 ```bash
 mutohplot plot input.hpgl /dev/ttyUSB0 \
   --paper a3 --window norm --fit --auto-rotate --margin 5 \
-  --pen-width 1=0.5 --pen-width 3=0.3
+  --config Standard_draft.toml
 ```
 
-Unterstützte Breiten sind 0,3, 0,5, 0,7, 1,0 und 1,5 mm. Mit
-`--default-pen-width` wird der Rückfallwert für nicht ausdrücklich
-zugeordnete Stifte gesetzt. Der Linienabstand der Füllung beträgt höchstens
-85 Prozent der jeweiligen Stiftbreite auf dem Papier.
+`--pen-width 1=0.7` kann die Profilbreite für einen einzelnen Lauf
+überschreiben. Der Linienabstand der Füllung beträgt im Standardprofil
+höchstens 85 Prozent der jeweiligen Stiftbreite auf dem Papier.
 
 Die SVG-Vorschau zeigt Blattkante, Hard-Clip-Bereich, Sicherheitsrand,
 Stiftfarben und den Nullpunkt des XP-500 in der Blattmitte.

@@ -18,6 +18,12 @@ from .hpgl.writer import HPGLWriter
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
+from .pen_config import (
+    SUPPORTED_PEN_WIDTHS_MM,
+    PenConfigError,
+    apply_pen_colors,
+    load_pen_profile,
+)
 from .report import check_bounds, transformation_report
 from .serial_io import (
     BUFFER_PROFILES,
@@ -32,12 +38,6 @@ from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
 from .transform.fit import apply_fit, fit_document_to_area, rotate_document
 from .transform.hard_clip import hard_clip_center_correction
-
-
-SUPPORTED_PEN_WIDTHS_MM = (0.3, 0.5, 0.7, 1.0, 1.5)
-DEFAULT_PEN_WIDTH_MM = 0.5
-DEFAULT_PEN_WIDTHS_MM = {1: 0.5, 3: 0.3}
-RA_FILL_SPACING_FACTOR = 0.85
 
 
 def program_version() -> str:
@@ -97,6 +97,7 @@ def parser():
     inspect = sub.add_parser("inspect", help="inspect an HP-GL file without converting it")
     inspect.add_argument("input", help="HP-GL file or quoted wildcard pattern")
     inspect.add_argument("--source-unit", type=float, default=0.025)
+    add_pen_config_argument(inspect)
     inspect.add_argument(
         "--strict",
         action="store_true",
@@ -235,6 +236,7 @@ def pen_width(value: str) -> tuple[int, float]:
 
 
 def add_pen_width_arguments(command_parser) -> None:
+    add_pen_config_argument(command_parser)
     command_parser.add_argument(
         "--pen-width",
         action="append",
@@ -242,48 +244,77 @@ def add_pen_width_arguments(command_parser) -> None:
         metavar="PEN=MM",
         default=[],
         help=(
-            "physical pen width for RA fills; repeat as needed "
-            "(default: pen 1=0.5 mm, pen 3=0.3 mm)"
+            "override a physical pen width from the selected profile; repeat as needed"
         ),
     )
     command_parser.add_argument(
         "--default-pen-width",
         type=float,
         choices=SUPPORTED_PEN_WIDTHS_MM,
-        default=DEFAULT_PEN_WIDTH_MM,
+        default=None,
         metavar="MM",
-        help="physical width for pens without an explicit mapping (default: 0.5)",
+        help="override the profile width for pens in the default group",
     )
 
 
+def add_pen_config_argument(command_parser) -> None:
+    command_parser.add_argument(
+        "--config",
+        metavar="FILE",
+        help="use FILE instead of the required installed Standard.toml profile",
+    )
+
+
+def pen_profile(args):
+    profile = getattr(args, "_pen_profile", None)
+    if profile is None:
+        profile = load_pen_profile(getattr(args, "config", None))
+        args._pen_profile = profile
+    return profile
+
+
 def configured_pen_widths(args) -> dict[int, float]:
-    widths = dict(DEFAULT_PEN_WIDTHS_MM)
-    widths.update(dict(args.pen_width))
+    profile = pen_profile(args)
+    widths = {number: pen.width_mm for number, pen in profile.pens.items()}
+    default_override = getattr(args, "default_pen_width", None)
+    if default_override is not None:
+        for number, pen in profile.pens.items():
+            if pen.group == "default":
+                widths[number] = default_override
+    widths.update(dict(getattr(args, "pen_width", [])))
     return widths
 
 
 def ra_fill_spacings(args, fit_scale: float = 1.0) -> dict[int, float]:
     if fit_scale <= 0:
         raise ValueError("Fit scale must be greater than zero")
-    widths = configured_pen_widths(args)
+    profile = pen_profile(args)
     return {
-        pen: width * RA_FILL_SPACING_FACTOR / fit_scale
-        for pen, width in widths.items()
-    } | {
-        pen: args.default_pen_width * RA_FILL_SPACING_FACTOR / fit_scale
-        for pen in range(1, 9)
-        if pen not in widths
+        pen: width * profile.fill_spacing_factor / fit_scale
+        for pen, width in configured_pen_widths(args).items()
     }
 
 
 def report_ra_fill(document, args) -> None:
+    profile = pen_profile(args)
+    print(f"Pen profile: {profile.name} ({profile.source})")
+    used_pens = sorted({polyline.pen for polyline in document.polylines})
+    widths = configured_pen_widths(args)
+    for number in used_pens:
+        pen = profile.pen(number)
+        details = (
+            f"Pen {number}: group={pen.group}, type={pen.pen_type}, "
+            f"width={widths[number]:.1f} mm, color={pen.color}"
+        )
+        if pen.speed_mm_s is not None:
+            details += f", configured speed={pen.speed_mm_s:g} mm/s (not yet applied)"
+        print(details)
     ra_pens = sorted(set(document.metadata.get("ra_pens", [])))
     if not ra_pens:
         return
-    widths = configured_pen_widths(args)
     for pen in ra_pens:
-        width = widths.get(pen, args.default_pen_width)
-        spacing = width * RA_FILL_SPACING_FACTOR
+        width = widths[pen]
+        spacing = width * profile.fill_spacing_factor
         print(
             f"RA fill: pen {pen}, width={width:.1f} mm, "
             f"paper spacing<={spacing:.3f} mm"
@@ -529,6 +560,8 @@ def convert_hpgl(args, input_path, preview_path=None):
         if args.report:
             report_ra_fill(document, args)
 
+    apply_pen_colors(document, pen_profile(args))
+
     if preview_path:
         if args.fit:
             preview_document = bottom_left_document_in_paper_coordinates(
@@ -570,6 +603,12 @@ def convert_hpgl(args, input_path, preview_path=None):
 def main():
     args = parser().parse_args()
 
+    if args.command in {"hpgl", "inspect", "plot"}:
+        try:
+            pen_profile(args)
+        except PenConfigError as error:
+            raise SystemExit(f"Pen configuration error: {error}") from error
+
     if args.command == "ports":
         items=list_serial_ports()
         if not items: print("No serial ports found")
@@ -607,9 +646,13 @@ def main():
             if index:
                 print()
             try:
-                document = HPGLParser(args.source_unit).parse_text(
+                document = HPGLParser(
+                    args.source_unit,
+                    ra_fill_spacings(args),
+                ).parse_text(
                     input_path.read_text(errors="replace")
                 )
+                apply_pen_colors(document, pen_profile(args))
             except ValueError as error:
                 raise SystemExit(
                     f"Failed to inspect {input_path}: {error}"

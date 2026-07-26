@@ -1,0 +1,26 @@
+[profile]
+name = "Standard"
+
+[fill]
+# Hardware-tested maximum line spacing relative to the physical pen width.
+spacing-factor = 0.85
+
+[pens]
+# Fallback for slots that are not assigned to a group below.
+default-width-mm = 0.5
+default-color = "black"
+default-type = "other"
+
+[pen-groups.pencil-05]
+pens = [1, 2]
+type = "pencil"
+width-mm = 0.5
+color = "graphite"
+# speed-mm-s can be added after XP-500 speed control is hardware-tested.
+
+[pen-groups.pencil-03]
+pens = [3, 4]
+type = "pencil"
+width-mm = 0.3
+color = "graphite"
+# speed-mm-s can be added after XP-500 speed control is hardware-tested.

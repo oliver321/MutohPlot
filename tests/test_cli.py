@@ -110,7 +110,7 @@ def test_pen_width_option_validates_pen_and_supported_width():
         )
 
 
-def test_repeated_pen_width_uses_last_value_and_default_for_other_pens():
+def test_repeated_pen_width_uses_last_value_and_default_for_ungrouped_pens():
     args = cli.parser().parse_args(
         [
             "hpgl",
@@ -129,7 +129,8 @@ def test_repeated_pen_width_uses_last_value_and_default_for_other_pens():
 
     assert spacings[1] == pytest.approx(0.7 * 0.85)
     assert spacings[3] == pytest.approx(0.3 * 0.85)
-    assert spacings[2] == pytest.approx(1.0 * 0.85)
+    assert spacings[2] == pytest.approx(0.5 * 0.85)
+    assert spacings[5] == pytest.approx(1.0 * 0.85)
 
 
 def test_fitted_ra_spacing_uses_physical_width_of_active_pen(tmp_path, capsys):

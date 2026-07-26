@@ -227,6 +227,136 @@ def test_inspect_strict_exits_with_status_2_for_unsupported_command(
     assert "Unsupported: VS (1)" in capsys.readouterr().out
 
 
+def test_inspect_accepts_quoted_wildcard(tmp_path, monkeypatch, capsys):
+    (tmp_path / "Input1.hpgl").write_text("IN;SP1;PU0,0;PD100,100;", encoding="ascii")
+    (tmp_path / "Input2.hpgl").write_text("IN;SP2;PU0,0;PD200,100;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["mutohplot", "inspect", str(tmp_path / "Input*.hpgl")],
+    )
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "Input1.hpgl" in output
+    assert "Input2.hpgl" in output
+    assert output.count("Polylines: 1") == 2
+
+
+def test_plot_no_send_saves_converted_hpgl_and_preview(
+    tmp_path, monkeypatch, capsys
+):
+    source = tmp_path / "Input.hpgl"
+    saved = tmp_path / "Input_mutoh.hpgl"
+    preview = tmp_path / "Input_preview.svg"
+    source.write_text(
+        "IN;SP1;PU0,0;PD11880,0,11880,8400,0,8400,0,0;",
+        encoding="ascii",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "plot",
+            str(source),
+            "--no-send",
+            "--fit",
+            "--auto-rotate",
+            "--margin",
+            "5",
+            "--save-hpgl",
+            str(saved),
+            "--preview",
+            str(preview),
+        ],
+    )
+
+    cli.main()
+
+    assert saved.read_text(encoding="ascii").startswith("IN;")
+    assert preview.read_text(encoding="utf-8").startswith("<svg")
+    assert f"Wrote {saved}" in capsys.readouterr().out
+
+
+def test_plot_batch_converts_wildcard_to_named_outputs(
+    tmp_path, monkeypatch, capsys
+):
+    for name in ("Input1.hpgl", "Input2.hpgl"):
+        (tmp_path / name).write_text("IN;SP1;PU0,0;PD100,100;", encoding="ascii")
+    converted = tmp_path / "converted"
+    previews = tmp_path / "previews"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "plot",
+            str(tmp_path / "Input*.hpgl"),
+            "--no-send",
+            "--save-hpgl-dir",
+            str(converted),
+            "--preview",
+            str(previews),
+        ],
+    )
+
+    cli.main()
+
+    assert (converted / "Input1_mutoh.hpgl").is_file()
+    assert (converted / "Input2_mutoh.hpgl").is_file()
+    assert (previews / "Input1_preview.svg").is_file()
+    assert (previews / "Input2_preview.svg").is_file()
+    output = capsys.readouterr().out
+    assert "[1/2]" in output
+    assert "[2/2]" in output
+
+
+def test_plot_batch_send_requires_explicit_permission(tmp_path, monkeypatch):
+    for name in ("Input1.hpgl", "Input2.hpgl"):
+        (tmp_path / name).write_text("IN;PU0,0;PD100,100;", encoding="ascii")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "plot",
+            str(tmp_path / "Input*.hpgl"),
+            "/dev/ttyUSB0",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="--batch-send"):
+        cli.main()
+
+
+def test_plot_saved_hpgl_is_exactly_what_gets_sent(tmp_path, monkeypatch):
+    source = tmp_path / "Input.hpgl"
+    saved = tmp_path / "Input_mutoh.hpgl"
+    source.write_text("IN;SP1;PU0,0;PD400,200;", encoding="ascii")
+    transmitted = {}
+
+    def fake_send_bytes(data, settings, profile, progress):
+        transmitted["data"] = data
+        transmitted["port"] = settings.port
+        return len(data)
+
+    monkeypatch.setattr(cli, "send_bytes", fake_send_bytes)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "mutohplot",
+            "plot",
+            str(source),
+            "/dev/ttyUSB0",
+            "--save-hpgl",
+            str(saved),
+        ],
+    )
+
+    cli.main()
+
+    assert transmitted["port"] == "/dev/ttyUSB0"
+    assert saved.read_bytes() == transmitted["data"]
+
+
 def test_hpgl_preview_contains_a3_areas_origin_and_fitted_geometry(
     tmp_path, monkeypatch
 ):

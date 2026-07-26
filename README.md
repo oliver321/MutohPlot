@@ -1,4 +1,4 @@
-# MutohPlot v0.0.13
+# MutohPlot v0.0.14
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.
@@ -45,12 +45,41 @@ Stiftfarben und den Nullpunkt des XP-500 in der Blattmitte.
 ```bash
 mutohplot inspect input.hpgl
 mutohplot inspect input.hpgl --strict
+mutohplot inspect 'Input*.hpgl'
 ```
 
 `inspect` meldet die vorkommenden Befehle, nicht unterstützte Befehle,
 verwendete Stifte, Grenzen, Größe sowie Zeichen- und Leerweg. `--strict`
 beendet die Prüfung mit Status 2, wenn nicht unterstützte Befehle oder
 Zeichen in `LB`-Beschriftungen gefunden werden.
+
+## Konvertieren und direkt plotten
+
+`plot` verarbeitet HP-GL mit denselben A3-Einstellungen wie `hpgl` und sendet
+die konvertierten Daten anschließend direkt an die serielle Schnittstelle:
+
+```bash
+mutohplot plot Input.hpgl /dev/ttyUSB0 \
+  --paper a3 --window norm --fit --auto-rotate --margin 5 --optimize \
+  --buffer-profile small --progress \
+  --save-hpgl Input_mutoh.hpgl \
+  --preview Input_preview.svg
+```
+
+Mit `--no-send` dient der Befehl zur reinen Stapelkonvertierung. Ein in
+Anführungszeichen gesetztes Muster wird von MutohPlot aufgelöst:
+
+```bash
+mutohplot plot 'Input*.hpgl' \
+  --paper a3 --window norm --fit --auto-rotate --margin 5 --optimize \
+  --save-hpgl-dir converted \
+  --preview previews \
+  --no-send
+```
+
+Dabei entstehen `converted/Input1_mutoh.hpgl` und
+`previews/Input1_preview.svg`. Das Senden mehrerer Treffer ist absichtlich
+gesperrt und muss ausdrücklich mit `--batch-send` freigegeben werden.
 
 Die manuellen Achsenoptionen bleiben für Konvertierungen ohne `--fit`
 verfügbar. `--offset-first` und `--offset-second` können auch zusammen mit

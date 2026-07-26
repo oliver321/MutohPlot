@@ -32,5 +32,14 @@ Commands outside the table above are listed in
 prints a warning with each command name and occurrence count. They are not
 emitted by the current polyline writer.
 
+Use `mutohplot inspect file.hpgl` to list all input commands, unsupported
+commands, pens, geometry bounds, and drawing distances without writing an
+output file. Add `--strict` to return exit status 2 when unsupported input is
+found.
+
+The `mutohplot hpgl` command accepts `--preview preview.svg`. With `--fit`,
+the preview shows the fitted drawing in paper coordinates together with the
+paper edge, hard-clip area, safety margin, pen colours, and the XP-500 origin.
+
 The next compatibility block is additional label state (`DT`, `SR`),
 followed by rectangles and scaling (`EA`, `ER`, `RA`, `RR`, `IP`, `IR`, `SC`).

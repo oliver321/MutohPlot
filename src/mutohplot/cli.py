@@ -1,4 +1,5 @@
 import argparse
+import glob
 import json
 import sys
 from collections import Counter
@@ -18,7 +19,14 @@ from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
 from .report import check_bounds, transformation_report
-from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_file, serial_status
+from .serial_io import (
+    BUFFER_PROFILES,
+    SerialSettings,
+    list_serial_ports,
+    send_bytes,
+    send_file,
+    serial_status,
+)
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
@@ -80,7 +88,7 @@ def parser():
     )
 
     inspect = sub.add_parser("inspect", help="inspect an HP-GL file without converting it")
-    inspect.add_argument("input")
+    inspect.add_argument("input", help="HP-GL file or quoted wildcard pattern")
     inspect.add_argument("--source-unit", type=float, default=0.025)
     inspect.add_argument(
         "--strict",
@@ -153,6 +161,48 @@ def parser():
     )
     send.add_argument("--progress", action="store_true")
     send.add_argument("--dry-run", action="store_true")
+
+    plot = sub.add_parser(
+        "plot",
+        help="convert HP-GL and optionally send it directly to the plotter",
+    )
+    plot.add_argument("input", help="HP-GL file or quoted wildcard pattern")
+    plot.add_argument("port", nargs="?", help="serial port, for example /dev/ttyUSB0")
+    plot.add_argument("--source-unit", type=float, default=0.025)
+    plot.add_argument("--device-unit", type=float, default=0.01)
+    plot.add_argument("--paper", choices=["a3", "a2", "a1", "a0"], default="a3")
+    plot.add_argument("--landscape", action="store_true")
+    plot.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
+    plot.add_argument("--fit", action="store_true")
+    plot_rotation = plot.add_mutually_exclusive_group()
+    plot_rotation.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=0)
+    plot_rotation.add_argument("--auto-rotate", action="store_true")
+    plot.add_argument("--margin", type=float, default=0.0)
+    plot.add_argument("--offset-first", type=float, default=0.0)
+    plot.add_argument("--offset-second", type=float, default=0.0)
+    plot.add_argument("--no-hardclip-correction", action="store_true")
+    plot.add_argument("--optimize", action="store_true")
+    plot.add_argument("--no-reverse", action="store_true")
+    plot.add_argument("--report", action="store_true")
+    plot.add_argument("--stats", action="store_true")
+    plot.add_argument("--preview", help="single SVG path, or output directory in batch mode")
+    save = plot.add_mutually_exclusive_group()
+    save.add_argument("--save-hpgl", help="save converted HP-GL (single input only)")
+    save.add_argument("--save-hpgl-dir", help="save name_mutoh.hpgl files in this directory")
+    plot.add_argument("--no-send", action="store_true", help="convert without serial transmission")
+    plot.add_argument(
+        "--batch-send",
+        action="store_true",
+        help="explicitly allow sending every file matched by a wildcard",
+    )
+    plot.add_argument("--baud", type=int, default=19200)
+    plot.add_argument("--buffer-profile", choices=sorted(BUFFER_PROFILES), default="large")
+    plot.add_argument("--no-xonxoff", action="store_true")
+    plot.add_argument("--rtscts", action="store_true")
+    plot.add_argument("--dsrdtr", action="store_true")
+    plot.add_argument("--timeout", type=float, default=None)
+    plot.add_argument("--progress", action="store_true")
+    plot.add_argument("--dry-run", action="store_true")
 
     return p
 
@@ -276,6 +326,145 @@ def bottom_left_document_in_paper_coordinates(document, paper):
     )
 
 
+def expand_inputs(pattern):
+    matches = sorted(Path(path) for path in glob.glob(pattern))
+    if not matches and Path(pattern).is_file():
+        matches = [Path(pattern)]
+    if not matches:
+        raise SystemExit(f"No input files match: {pattern}")
+    return matches
+
+
+def convert_hpgl(args, input_path, preview_path=None):
+    document = HPGLParser(args.source_unit).parse_text(
+        Path(input_path).read_text(errors="replace")
+    )
+    paper = get_paper(args.paper, args.landscape)
+    profile = get_hard_clip(args.window)
+    hard = drawable_area(paper, profile, 0)
+    safe = drawable_area(paper, profile, args.margin)
+    if not args.fit and (args.rotate or args.auto_rotate):
+        raise SystemExit("--rotate and --auto-rotate require --fit")
+
+    unsupported = Counter(document.metadata.get("unsupported_commands", []))
+    if unsupported:
+        summary = ", ".join(
+            f"{name} ({count})" for name, count in sorted(unsupported.items())
+        )
+        print(f"Warning: Unsupported HP-GL commands: {summary}", file=sys.stderr)
+    unsupported_characters = Counter(
+        document.metadata.get("unsupported_label_characters", [])
+    )
+    if unsupported_characters:
+        summary = ", ".join(
+            f"{character!r} ({count})"
+            for character, count in sorted(unsupported_characters.items())
+        )
+        print(
+            f"Warning: Unsupported LB characters replaced with '?': {summary}",
+            file=sys.stderr,
+        )
+
+    original_bounds = None
+    fit_scale = None
+    fit_rotation = 0
+    if args.fit:
+        original_bounds = document.bounds()
+        if getattr(args, "swap_axes", False) or getattr(args, "flip_first", False) or getattr(args, "flip_second", False):
+            raise SystemExit(
+                "--fit determines axis swapping and direction automatically; "
+                "do not combine it with --swap-axes, --flip-first, or --flip-second"
+            )
+        area = DrawableArea(
+            safe.x_min_mm,
+            paper.height_mm - safe.y_max_mm,
+            safe.x_max_mm,
+            paper.height_mm - safe.y_min_mm,
+        )
+        fit_rotation = args.rotate
+        if args.auto_rotate and document.bounds() is not None:
+            normal_fit = fit_document_to_area(
+                document, area, paper.width_mm, paper.height_mm
+            )
+            rotated = rotate_document(document, 90)
+            rotated_fit = fit_document_to_area(
+                rotated, area, paper.width_mm, paper.height_mm
+            )
+            if rotated_fit.scale > normal_fit.scale:
+                document = rotated
+                fit_rotation = 90
+        elif args.rotate:
+            document = rotate_document(document, args.rotate)
+        fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
+        fit_scale = fit.scale
+        document = apply_fit(document, fit)
+        correction = hard_clip_center_correction(profile)
+        auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
+        auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
+        transform = CoordinateTransform(
+            0.0,
+            -1.0,
+            1.0,
+            0.0,
+            paper.height_mm / 2.0 + auto_first + args.offset_first,
+            -paper.width_mm / 2.0 + auto_second + args.offset_second,
+        )
+        if args.report:
+            print(f"Fit rotation: {fit_rotation} degrees")
+            print(
+                transformation_report(
+                    document, paper, profile, area, args.margin, fit.scale
+                )
+            )
+    else:
+        swap_axes = getattr(args, "swap_axes", False)
+        a, b, c, d = (0, 1, 1, 0) if swap_axes else (1, 0, 0, 1)
+        if getattr(args, "flip_first", False):
+            a, b = -a, -b
+        if getattr(args, "flip_second", False):
+            c, d = -c, -d
+        transform = CoordinateTransform(
+            a, b, c, d, args.offset_first, args.offset_second
+        )
+
+    if preview_path:
+        if args.fit:
+            preview_document = bottom_left_document_in_paper_coordinates(
+                document, paper
+            )
+        else:
+            preview_document = document_in_paper_coordinates(
+                document, transform, paper
+            )
+        Path(preview_path).parent.mkdir(parents=True, exist_ok=True)
+        write_preview(
+            preview_document,
+            preview_path,
+            paper=paper,
+            hard_clip=hard,
+            safe_area=safe,
+            show_origin=True,
+        )
+
+    if args.optimize:
+        before = document.pen_up_distance_mm()
+        document = optimize_nearest(document, not args.no_reverse)
+        print(
+            f"Pen-up optimization: {before:.1f} mm -> "
+            f"{document.pen_up_distance_mm():.1f} mm"
+        )
+
+    max_chars = BUFFER_PROFILES[
+        getattr(args, "buffer_profile", "large")
+    ].hpgl_command_chars
+    output = HPGLWriter(
+        MutohXP500(unit_mm=args.device_unit),
+        transform,
+        max_command_chars=max_chars,
+    ).write(document)
+    return output, document, transform, original_bounds, fit_scale, fit_rotation
+
+
 def main():
     args = parser().parse_args()
 
@@ -310,14 +499,20 @@ def main():
         print(f"Sent {sent} bytes")
         return
     if args.command == "inspect":
-        document = HPGLParser(args.source_unit).parse_text(
-            Path(args.input).read_text(errors="replace")
-        )
-        inspect_document(args.input, document)
-        if args.strict and (
-            document.metadata.get("unsupported_commands")
-            or document.metadata.get("unsupported_label_characters")
-        ):
+        strict_failure = False
+        inputs = expand_inputs(args.input)
+        for index, input_path in enumerate(inputs):
+            if index:
+                print()
+            document = HPGLParser(args.source_unit).parse_text(
+                input_path.read_text(errors="replace")
+            )
+            inspect_document(input_path, document)
+            strict_failure = strict_failure or bool(
+                document.metadata.get("unsupported_commands")
+                or document.metadata.get("unsupported_label_characters")
+            )
+        if args.strict and strict_failure:
             raise SystemExit(2)
         return
 
@@ -325,102 +520,123 @@ def main():
     hpgl_fit_scale = None
     hpgl_fit_rotation = 0
     if args.command == "hpgl":
-        document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
-        paper = get_paper(args.paper, args.landscape)
-        profile = get_hard_clip(args.window)
-        hard = drawable_area(paper, profile, 0)
-        safe = drawable_area(paper, profile, args.margin)
-        if not args.fit and (args.rotate or args.auto_rotate):
-            raise SystemExit("--rotate and --auto-rotate require --fit")
-        unsupported = Counter(document.metadata.get("unsupported_commands", []))
-        if unsupported:
-            summary = ", ".join(f"{name} ({count})" for name, count in sorted(unsupported.items()))
-            print(f"Warning: Unsupported HP-GL commands: {summary}", file=sys.stderr)
-        unsupported_characters = Counter(
-            document.metadata.get("unsupported_label_characters", [])
-        )
-        if unsupported_characters:
-            summary = ", ".join(
-                f"{character!r} ({count})"
-                for character, count in sorted(unsupported_characters.items())
+        (
+            output,
+            document,
+            transform,
+            hpgl_original_bounds,
+            hpgl_fit_scale,
+            hpgl_fit_rotation,
+        ) = convert_hpgl(args, args.input, args.preview)
+        Path(args.output).write_text(output, encoding="ascii")
+        print(f"Wrote {args.output}")
+        if args.stats:
+            stats(
+                document,
+                transform,
+                hpgl_original_bounds,
+                hpgl_fit_scale,
+                hpgl_fit_rotation,
             )
-            print(f"Warning: Unsupported LB characters replaced with '?': {summary}", file=sys.stderr)
-        if args.fit:
-            hpgl_original_bounds = document.bounds()
-            if args.swap_axes or args.flip_first or args.flip_second:
-                raise SystemExit(
-                    "--fit determines axis swapping and direction automatically; "
-                    "do not combine it with --swap-axes, --flip-first, or --flip-second"
-                )
-            page_area = safe
-            # Conventional HP-GL coordinates start at the lower-left corner,
-            # while DrawableArea uses upper-left page coordinates.
-            area = DrawableArea(
-                page_area.x_min_mm,
-                paper.height_mm - page_area.y_max_mm,
-                page_area.x_max_mm,
-                paper.height_mm - page_area.y_min_mm,
-            )
-            hpgl_fit_rotation = args.rotate
-            if args.auto_rotate and document.bounds() is not None:
-                normal_fit = fit_document_to_area(
-                    document, area, paper.width_mm, paper.height_mm
-                )
-                rotated = rotate_document(document, 90)
-                rotated_fit = fit_document_to_area(
-                    rotated, area, paper.width_mm, paper.height_mm
-                )
-                if rotated_fit.scale > normal_fit.scale:
-                    document = rotated
-                    hpgl_fit_rotation = 90
-            elif args.rotate:
-                document = rotate_document(document, args.rotate)
-            fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
-            hpgl_fit_scale = fit.scale
-            document = apply_fit(document, fit)
-            correction = hard_clip_center_correction(profile)
-            auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
-            auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
-            transform = CoordinateTransform(
-                0.0,
-                -1.0,
-                1.0,
-                0.0,
-                paper.height_mm / 2.0 + auto_first + args.offset_first,
-                -paper.width_mm / 2.0 + auto_second + args.offset_second,
-            )
-            if args.report:
-                print(f"Fit rotation: {hpgl_fit_rotation} degrees")
-                print(
-                    transformation_report(
-                        document, paper, profile, area, args.margin, fit.scale
-                    )
-                )
-        else:
-            a, b, c, d = (0, 1, 1, 0) if args.swap_axes else (1, 0, 0, 1)
-            if args.flip_first:
-                a, b = -a, -b
-            if args.flip_second:
-                c, d = -c, -d
-            transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
+        return
 
-        if args.preview:
-            if args.fit:
-                preview_document = bottom_left_document_in_paper_coordinates(
-                    document, paper
-                )
-            else:
-                preview_document = document_in_paper_coordinates(
-                    document, transform, paper
-                )
-            write_preview(
-                preview_document,
-                args.preview,
-                paper=paper,
-                hard_clip=hard,
-                safe_area=safe,
-                show_origin=True,
+    elif args.command == "plot":
+        inputs = expand_inputs(args.input)
+        batch = len(inputs) > 1
+        if not args.no_send and not args.port:
+            raise SystemExit("PORT is required unless --no-send is used")
+        if batch and not args.no_send and not args.batch_send:
+            raise SystemExit(
+                f"{len(inputs)} files matched; use --batch-send to allow sending all of them"
             )
+        if batch and args.save_hpgl:
+            raise SystemExit("--save-hpgl is only valid for one input; use --save-hpgl-dir")
+        if batch and args.preview and Path(args.preview).suffix.lower() == ".svg":
+            raise SystemExit("In batch mode --preview must name an output directory")
+
+        save_dir = Path(args.save_hpgl_dir) if args.save_hpgl_dir else None
+        if save_dir:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        preview_dir = Path(args.preview) if batch and args.preview else None
+        if preview_dir:
+            preview_dir.mkdir(parents=True, exist_ok=True)
+
+        settings = None
+        profile = BUFFER_PROFILES[args.buffer_profile]
+        if not args.no_send:
+            settings = SerialSettings(
+                args.port,
+                args.baud,
+                xonxoff=not args.no_xonxoff,
+                rtscts=args.rtscts,
+                dsrdtr=args.dsrdtr,
+                timeout_s=30.0,
+                write_timeout_s=args.timeout,
+            )
+
+        for index, input_path in enumerate(inputs, start=1):
+            if batch:
+                print(f"[{index}/{len(inputs)}] {input_path}")
+            preview_path = None
+            if args.preview:
+                preview_path = (
+                    preview_dir / f"{input_path.stem}_preview.svg"
+                    if batch
+                    else Path(args.preview)
+                )
+            output, document, transform, original, scale, rotation = convert_hpgl(
+                args, input_path, preview_path
+            )
+            data = output.encode("ascii")
+
+            saved_path = None
+            if args.save_hpgl:
+                saved_path = Path(args.save_hpgl)
+            elif save_dir:
+                saved_path = save_dir / f"{input_path.stem}_mutoh.hpgl"
+            if saved_path:
+                saved_path.parent.mkdir(parents=True, exist_ok=True)
+                saved_path.write_bytes(data)
+                print(f"Wrote {saved_path}")
+
+            if args.stats:
+                stats(document, transform, original, scale, rotation)
+
+            if args.no_send:
+                continue
+            print(
+                f"Port={args.port}, baud={args.baud}, 8N1, "
+                f"XON/XOFF={settings.xonxoff}, RTS/CTS={settings.rtscts}, "
+                f"DTR/DSR={settings.dsrdtr}, profile={profile.name}, "
+                f"chunk={profile.chunk_size}, "
+                f"write-timeout={args.timeout if args.timeout is not None else 'unlimited'}"
+            )
+            if args.dry_run:
+                print(f"Dry run: {len(data)} bytes would be sent")
+                continue
+
+            def progress(sent, total):
+                if args.progress:
+                    print(
+                        f"\rSending: {int(sent * 100 / total):3d}% ({sent}/{total})",
+                        end="",
+                        flush=True,
+                    )
+
+            try:
+                sent = send_bytes(data, settings, profile, progress)
+            except KeyboardInterrupt:
+                if args.progress:
+                    print()
+                raise SystemExit("Transmission cancelled by user (serial port closed)")
+            except (OSError, RuntimeError) as error:
+                if args.progress:
+                    print()
+                raise SystemExit(f"Transmission failed: {error}") from error
+            if args.progress:
+                print()
+            print(f"Sent {sent} bytes")
+        return
 
     elif args.command == "calibrate":
         paper = get_paper("a3")

@@ -35,3 +35,20 @@ def test_numeric_commands_may_omit_semicolon_between_mnemonics():
     ]
     assert commands[3].numeric_args == [100.0, 400.0]
     assert commands[4].numeric_args == [0.0, 1.0]
+
+
+def test_rectangle_commands_may_be_followed_by_pen_up_without_semicolon():
+    commands = HPGLTokenizer().tokenize(
+        "PU2550,0EA2550,10870PU-15970,0RA-15970,10870PU0,0;"
+    )
+
+    assert [command.name for command in commands] == [
+        "PU",
+        "EA",
+        "PU",
+        "RA",
+        "PU",
+    ]
+    assert commands[1].numeric_args == [2550.0, 10870.0]
+    assert commands[2].numeric_args == [-15970.0, 0.0]
+    assert commands[3].numeric_args == [-15970.0, 10870.0]

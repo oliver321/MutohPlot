@@ -243,6 +243,17 @@ def test_inspect_accepts_quoted_wildcard(tmp_path, monkeypatch, capsys):
     assert output.count("Polylines: 1") == 2
 
 
+def test_inspect_parse_error_identifies_input_file(tmp_path, monkeypatch):
+    source = tmp_path / "broken.hpgl"
+    source.write_text("IN;PU0,not-a-number;", encoding="ascii")
+    monkeypatch.setattr("sys.argv", ["mutohplot", "inspect", str(source)])
+
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+
+    assert f"Failed to inspect {source}:" in str(error.value)
+
+
 def test_plot_no_send_saves_converted_hpgl_and_preview(
     tmp_path, monkeypatch, capsys
 ):

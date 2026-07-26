@@ -504,9 +504,14 @@ def main():
         for index, input_path in enumerate(inputs):
             if index:
                 print()
-            document = HPGLParser(args.source_unit).parse_text(
-                input_path.read_text(errors="replace")
-            )
+            try:
+                document = HPGLParser(args.source_unit).parse_text(
+                    input_path.read_text(errors="replace")
+                )
+            except ValueError as error:
+                raise SystemExit(
+                    f"Failed to inspect {input_path}: {error}"
+                ) from error
             inspect_document(input_path, document)
             strict_failure = strict_failure or bool(
                 document.metadata.get("unsupported_commands")

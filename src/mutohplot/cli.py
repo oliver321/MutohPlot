@@ -8,6 +8,9 @@ from pathlib import Path
 
 from .calibration import create_a3_calibration
 from .devices.mutoh_xp500 import MutohXP500
+from .document import PlotDocument
+from .geometry.point import Point
+from .geometry.polyline import Polyline
 from .hard_clip import DrawableArea, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
@@ -71,6 +74,19 @@ def parser():
     hpgl.add_argument("--optimize", action="store_true")
     hpgl.add_argument("--no-reverse", action="store_true")
     hpgl.add_argument("--stats", action="store_true")
+    hpgl.add_argument(
+        "--preview",
+        help="write an SVG preview with paper, clip areas, pens, and plotter origin",
+    )
+
+    inspect = sub.add_parser("inspect", help="inspect an HP-GL file without converting it")
+    inspect.add_argument("input")
+    inspect.add_argument("--source-unit", type=float, default=0.025)
+    inspect.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit with status 2 when unsupported commands or label characters are found",
+    )
 
     svg = sub.add_parser("svg")
     svg.add_argument("input")
@@ -175,6 +191,91 @@ def stats(document, transform, original_bounds=None, fit_scale=None, fit_rotatio
         )
 
 
+def _counter_summary(items):
+    counts = Counter(items)
+    return ", ".join(f"{name} ({count})" for name, count in counts.items())
+
+
+def inspect_document(path, document):
+    commands = document.metadata.get("hpgl_commands", [])
+    unsupported = document.metadata.get("unsupported_commands", [])
+    unsupported_characters = document.metadata.get(
+        "unsupported_label_characters", []
+    )
+    pens = sorted({polyline.pen for polyline in document.polylines})
+
+    print(f"File: {path}")
+    print(f"Commands: {_counter_summary(commands) if commands else 'none'}")
+    print(
+        "Unsupported: "
+        + (_counter_summary(unsupported) if unsupported else "none")
+    )
+    if unsupported_characters:
+        print(
+            "Unsupported LB characters: "
+            + _counter_summary(repr(character) for character in unsupported_characters)
+        )
+    print(f"Pens used: {', '.join(str(pen) for pen in pens) if pens else 'none'}")
+    print(f"Polylines: {len(document.polylines)}")
+    bounds = document.bounds()
+    if bounds is None:
+        print("Bounds: none")
+        print("Size: 0.00 x 0.00 mm")
+    else:
+        x0, y0, x1, y1 = bounds
+        print(f"Bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
+        print(f"Size: {x1 - x0:.2f} x {y1 - y0:.2f} mm")
+    print(f"Drawing distance: {document.drawing_distance_mm():.1f} mm")
+    print(f"Pen-up distance: {document.pen_up_distance_mm():.1f} mm")
+
+
+def document_in_paper_coordinates(document, transform, paper):
+    polylines = []
+    for polyline in document.polylines:
+        points = []
+        for point in polyline.points:
+            mutoh = transform.apply(point)
+            points.append(
+                Point(
+                    mutoh.y + paper.width_mm / 2.0,
+                    mutoh.x + paper.height_mm / 2.0,
+                )
+            )
+        polylines.append(
+            Polyline(
+                points,
+                polyline.pen,
+                source_color=polyline.source_color,
+            )
+        )
+    return PlotDocument(
+        polylines,
+        metadata={
+            **document.metadata,
+            "page_width_mm": paper.width_mm,
+            "page_height_mm": paper.height_mm,
+        },
+    )
+
+
+def bottom_left_document_in_paper_coordinates(document, paper):
+    return PlotDocument(
+        [
+            Polyline(
+                [Point(point.x, paper.height_mm - point.y) for point in polyline.points],
+                polyline.pen,
+                source_color=polyline.source_color,
+            )
+            for polyline in document.polylines
+        ],
+        metadata={
+            **document.metadata,
+            "page_width_mm": paper.width_mm,
+            "page_height_mm": paper.height_mm,
+        },
+    )
+
+
 def main():
     args = parser().parse_args()
 
@@ -208,12 +309,27 @@ def main():
             print()
         print(f"Sent {sent} bytes")
         return
+    if args.command == "inspect":
+        document = HPGLParser(args.source_unit).parse_text(
+            Path(args.input).read_text(errors="replace")
+        )
+        inspect_document(args.input, document)
+        if args.strict and (
+            document.metadata.get("unsupported_commands")
+            or document.metadata.get("unsupported_label_characters")
+        ):
+            raise SystemExit(2)
+        return
 
     hpgl_original_bounds = None
     hpgl_fit_scale = None
     hpgl_fit_rotation = 0
     if args.command == "hpgl":
         document = HPGLParser(args.source_unit).parse_text(Path(args.input).read_text(errors="replace"))
+        paper = get_paper(args.paper, args.landscape)
+        profile = get_hard_clip(args.window)
+        hard = drawable_area(paper, profile, 0)
+        safe = drawable_area(paper, profile, args.margin)
         if not args.fit and (args.rotate or args.auto_rotate):
             raise SystemExit("--rotate and --auto-rotate require --fit")
         unsupported = Counter(document.metadata.get("unsupported_commands", []))
@@ -236,9 +352,7 @@ def main():
                     "--fit determines axis swapping and direction automatically; "
                     "do not combine it with --swap-axes, --flip-first, or --flip-second"
                 )
-            paper = get_paper(args.paper, args.landscape)
-            profile = get_hard_clip(args.window)
-            page_area = drawable_area(paper, profile, args.margin)
+            page_area = safe
             # Conventional HP-GL coordinates start at the lower-left corner,
             # while DrawableArea uses upper-left page coordinates.
             area = DrawableArea(
@@ -289,6 +403,24 @@ def main():
             if args.flip_second:
                 c, d = -c, -d
             transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
+
+        if args.preview:
+            if args.fit:
+                preview_document = bottom_left_document_in_paper_coordinates(
+                    document, paper
+                )
+            else:
+                preview_document = document_in_paper_coordinates(
+                    document, transform, paper
+                )
+            write_preview(
+                preview_document,
+                args.preview,
+                paper=paper,
+                hard_clip=hard,
+                safe_area=safe,
+                show_origin=True,
+            )
 
     elif args.command == "calibrate":
         paper = get_paper("a3")

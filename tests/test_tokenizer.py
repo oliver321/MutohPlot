@@ -1,5 +1,6 @@
 from mutohplot.hpgl.tokenizer import HPGLTokenizer
 
+
 def test_tokenizer_basic_commands():
     commands = HPGLTokenizer().tokenize("IN;SP1;PA10,20;")
     assert [c.name for c in commands] == ["IN", "SP", "PA"]
@@ -38,9 +39,7 @@ def test_numeric_commands_may_omit_semicolon_between_mnemonics():
 
 
 def test_rectangle_commands_may_be_followed_by_pen_up_without_semicolon():
-    commands = HPGLTokenizer().tokenize(
-        "PU2550,0EA2550,10870PU-15970,0RA-15970,10870PU0,0;"
-    )
+    commands = HPGLTokenizer().tokenize("PU2550,0EA2550,10870PU-15970,0RA-15970,10870PU0,0;")
 
     assert [command.name for command in commands] == [
         "PU",

@@ -54,8 +54,8 @@ def transformation_report(
         ),
         (
             f"Hard-clip area: "
-            f"{paper.width_mm-profile.left_mm-profile.right_mm:.1f} x "
-            f"{paper.height_mm-profile.top_mm-profile.bottom_mm:.1f} mm"
+            f"{paper.width_mm - profile.left_mm - profile.right_mm:.1f} x "
+            f"{paper.height_mm - profile.top_mm - profile.bottom_mm:.1f} mm"
         ),
         f"Additional margin: {margin_mm:.1f} mm",
         f"Available area: {area.width_mm:.1f} x {area.height_mm:.1f} mm",
@@ -73,7 +73,7 @@ def transformation_report(
     if bounds:
         x0, y0, x1, y1 = bounds
         lines.append(f"Drawing bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
-        lines.append(f"Drawing size: {x1-x0:.2f} x {y1-y0:.2f} mm")
+        lines.append(f"Drawing size: {x1 - x0:.2f} x {y1 - y0:.2f} mm")
     if scale is not None:
         lines.append(f"Fit scale: {scale:.6f}")
 

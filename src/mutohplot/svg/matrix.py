@@ -1,6 +1,8 @@
 from dataclasses import dataclass
-from math import cos, sin, radians
+from math import cos, radians, sin
+
 from ..geometry.point import Point
+
 
 @dataclass(frozen=True, slots=True)
 class Matrix:
@@ -12,19 +14,16 @@ class Matrix:
     f: float = 0.0
 
     def apply(self, p: Point) -> Point:
-        return Point(
-            self.a*p.x + self.c*p.y + self.e,
-            self.b*p.x + self.d*p.y + self.f
-        )
+        return Point(self.a * p.x + self.c * p.y + self.e, self.b * p.x + self.d * p.y + self.f)
 
     def then(self, other):
         return Matrix(
-            other.a*self.a + other.c*self.b,
-            other.b*self.a + other.d*self.b,
-            other.a*self.c + other.c*self.d,
-            other.b*self.c + other.d*self.d,
-            other.a*self.e + other.c*self.f + other.e,
-            other.b*self.e + other.d*self.f + other.f,
+            other.a * self.a + other.c * self.b,
+            other.b * self.a + other.d * self.b,
+            other.a * self.c + other.c * self.d,
+            other.b * self.c + other.d * self.d,
+            other.a * self.e + other.c * self.f + other.e,
+            other.b * self.e + other.d * self.f + other.f,
         )
 
     @classmethod

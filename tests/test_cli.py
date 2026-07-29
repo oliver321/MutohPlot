@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 import pytest
 
 from mutohplot import cli
@@ -95,19 +97,13 @@ def test_hpgl_fit_rejects_manual_axis_options(tmp_path, monkeypatch):
 
 
 def test_pen_width_option_validates_pen_and_supported_width():
-    parsed = cli.parser().parse_args(
-        ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "3=0.3"]
-    )
+    parsed = cli.parser().parse_args(["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "3=0.3"])
     assert parsed.pen_width == [(3, 0.3)]
 
     with pytest.raises(SystemExit):
-        cli.parser().parse_args(
-            ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "9=0.5"]
-        )
+        cli.parser().parse_args(["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "9=0.5"])
     with pytest.raises(SystemExit):
-        cli.parser().parse_args(
-            ["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "1=0.4"]
-        )
+        cli.parser().parse_args(["hpgl", "input.hpgl", "output.hpgl", "--pen-width", "1=0.4"])
 
 
 def test_repeated_pen_width_uses_last_value_and_default_for_ungrouped_pens():
@@ -158,10 +154,7 @@ def test_fitted_ra_spacing_uses_physical_width_of_active_pen(tmp_path, capsys):
     for pen, maximum in expected_spacing.items():
         fill = next(polyline for polyline in document.polylines if polyline.pen == pen)
         row_positions = sorted({round(point.y, 8) for point in fill.points})
-        largest_gap = max(
-            upper - lower
-            for lower, upper in zip(row_positions, row_positions[1:])
-        )
+        largest_gap = max(upper - lower for lower, upper in pairwise(row_positions))
         assert largest_gap <= maximum + 1e-8
         assert largest_gap > maximum * 0.95
 
@@ -170,9 +163,7 @@ def test_fitted_ra_spacing_uses_physical_width_of_active_pen(tmp_path, capsys):
     assert "RA fill: pen 3, width=0.3 mm, paper spacing<=0.255 mm" in report
 
 
-def test_hpgl_auto_rotate_uses_a3_height_for_landscape_input(
-    tmp_path, monkeypatch, capsys
-):
+def test_hpgl_auto_rotate_uses_a3_height_for_landscape_input(tmp_path, monkeypatch, capsys):
     source = tmp_path / "input.hpgl"
     output = tmp_path / "output.hpgl"
     # A4 landscape: 297 x 210 mm.
@@ -260,15 +251,10 @@ def test_hpgl_warns_with_unsupported_command_counts(tmp_path, monkeypatch, capsy
 
     cli.main()
 
-    assert (
-        "Warning: Unsupported HP-GL commands: IP (1), VS (2)"
-        in capsys.readouterr().err
-    )
+    assert "Warning: Unsupported HP-GL commands: IP (1), VS (2)" in capsys.readouterr().err
 
 
-def test_inspect_reports_commands_pens_geometry_and_unsupported(
-    tmp_path, monkeypatch, capsys
-):
+def test_inspect_reports_commands_pens_geometry_and_unsupported(tmp_path, monkeypatch, capsys):
     source = tmp_path / "input.hpgl"
     source.write_text(
         "IN;SP2;PU0,0;PD400,0,400,200;VS10;VS20;",
@@ -287,14 +273,10 @@ def test_inspect_reports_commands_pens_geometry_and_unsupported(
     assert "Drawing distance: 15.0 mm" in output
 
 
-def test_inspect_strict_exits_with_status_2_for_unsupported_command(
-    tmp_path, monkeypatch, capsys
-):
+def test_inspect_strict_exits_with_status_2_for_unsupported_command(tmp_path, monkeypatch, capsys):
     source = tmp_path / "input.hpgl"
     source.write_text("IN;VS10;", encoding="ascii")
-    monkeypatch.setattr(
-        "sys.argv", ["mutohplot", "inspect", str(source), "--strict"]
-    )
+    monkeypatch.setattr("sys.argv", ["mutohplot", "inspect", str(source), "--strict"])
 
     with pytest.raises(SystemExit) as error:
         cli.main()
@@ -330,9 +312,7 @@ def test_inspect_parse_error_identifies_input_file(tmp_path, monkeypatch):
     assert f"Failed to inspect {source}:" in str(error.value)
 
 
-def test_plot_no_send_saves_converted_hpgl_and_preview(
-    tmp_path, monkeypatch, capsys
-):
+def test_plot_no_send_saves_converted_hpgl_and_preview(tmp_path, monkeypatch, capsys):
     source = tmp_path / "Input.hpgl"
     saved = tmp_path / "Input_mutoh.hpgl"
     preview = tmp_path / "Input_preview.svg"
@@ -365,9 +345,7 @@ def test_plot_no_send_saves_converted_hpgl_and_preview(
     assert f"Wrote {saved}" in capsys.readouterr().out
 
 
-def test_plot_batch_converts_wildcard_to_named_outputs(
-    tmp_path, monkeypatch, capsys
-):
+def test_plot_batch_converts_wildcard_to_named_outputs(tmp_path, monkeypatch, capsys):
     for name in ("Input1.hpgl", "Input2.hpgl"):
         (tmp_path / name).write_text("IN;SP1;PU0,0;PD100,100;", encoding="ascii")
     converted = tmp_path / "converted"
@@ -444,9 +422,7 @@ def test_plot_saved_hpgl_is_exactly_what_gets_sent(tmp_path, monkeypatch):
     assert saved.read_bytes() == transmitted["data"]
 
 
-def test_hpgl_preview_contains_a3_areas_origin_and_fitted_geometry(
-    tmp_path, monkeypatch
-):
+def test_hpgl_preview_contains_a3_areas_origin_and_fitted_geometry(tmp_path, monkeypatch):
     source = tmp_path / "input.hpgl"
     output = tmp_path / "output.hpgl"
     preview = tmp_path / "preview.svg"

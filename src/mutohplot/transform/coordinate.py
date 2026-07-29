@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+
 from ..geometry.point import Point
+
 
 @dataclass(frozen=True, slots=True)
 class CoordinateTransform:
@@ -23,8 +25,10 @@ class CoordinateTransform:
     @classmethod
     def svg_to_mutoh(cls, page_width_mm: float, page_height_mm: float):
         return cls(
-            a=0.0, b=1.0,
-            c=1.0, d=0.0,
+            a=0.0,
+            b=1.0,
+            c=1.0,
+            d=0.0,
             tx=-page_height_mm / 2.0,
             ty=-page_width_mm / 2.0,
         )

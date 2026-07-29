@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
+
 from .point import Point
+
 
 @dataclass(slots=True)
 class Polyline:

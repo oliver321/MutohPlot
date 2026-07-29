@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 import pytest
 
 from mutohplot.hpgl.parser import HPGLParser
@@ -8,21 +10,20 @@ def test_absolute_pen_down_path():
     assert len(doc.polylines) == 1
     poly = doc.polylines[0]
     assert poly.pen == 2
-    assert [(p.x, p.y) for p in poly.points] == [
-        (2.5, 5.0), (7.5, 10.0), (12.5, 15.0)
-    ]
+    assert [(p.x, p.y) for p in poly.points] == [(2.5, 5.0), (7.5, 10.0), (12.5, 15.0)]
+
 
 def test_relative_mode():
     doc = HPGLParser(1.0).parse_text("IN;PA10,20;PD;PR5,-2,5,2;PU;")
     assert [(p.x, p.y) for p in doc.polylines[0].points] == [
-        (10.0, 20.0), (15.0, 18.0), (20.0, 20.0)
+        (10.0, 20.0),
+        (15.0, 18.0),
+        (20.0, 20.0),
     ]
 
 
 def test_label_is_converted_to_polylines_and_advances_position():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PA0,0;LBAB\x03;PD10,0;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PA0,0;LBAB\x03;PD10,0;PU;")
 
     assert doc.metadata.get("unsupported_commands") is None
     assert len(doc.polylines) > 2
@@ -46,9 +47,7 @@ def test_all_tokenized_commands_are_recorded_in_source_order():
 
 
 def test_label_honours_absolute_size_and_direction():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PA10,20;SI0.5,1;DI0,1;LBA\x03;PD10,30;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PA10,20;SI0.5,1;DI0,1;LBA\x03;PD10,30;PU;")
 
     assert doc.metadata.get("unsupported_commands") is None
     assert doc.bounds() == pytest.approx((10.0 / 7.0, 20.0, 10.0, 30.0))
@@ -66,15 +65,11 @@ def test_character_slant_shears_label_and_resets_without_parameters():
     assert slanted.polylines[0].points[0].x == pytest.approx(
         upright.polylines[0].points[0].x + 30.0 / 7.0
     )
-    assert slanted.polylines[0].points[0].y == pytest.approx(
-        upright.polylines[0].points[0].y
-    )
+    assert slanted.polylines[0].points[0].y == pytest.approx(upright.polylines[0].points[0].y)
 
 
 def test_character_plot_moves_in_character_cells_and_preserves_pen_state():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PA10,20;SI0.5,1;PD;CP2,1;PD30,40;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PA10,20;SI0.5,1;PD;CP2,1;PD30,40;PU;")
 
     assert doc.metadata.get("unsupported_commands") is None
     assert [(point.x, point.y) for point in doc.polylines[-1].points] == [
@@ -84,9 +79,7 @@ def test_character_plot_moves_in_character_cells_and_preserves_pen_state():
 
 
 def test_character_plot_without_parameters_returns_and_advances_one_line():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PA10,20;SI0.5,1;LBA\x03;CP;PD20,20;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PA10,20;SI0.5,1;LBA\x03;CP;PD20,20;PU;")
 
     assert doc.metadata.get("unsupported_commands") is None
     assert [(point.x, point.y) for point in doc.polylines[-1].points] == [
@@ -102,9 +95,7 @@ def test_character_commands_reject_invalid_parameter_counts(command):
 
 
 def test_arc_absolute_uses_chord_angle_and_updates_position():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;SP2;PU10,0;PD;AA0,0,90,45;PD0,20;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;SP2;PU10,0;PD;AA0,0,90,45;PD0,20;PU;")
 
     points = doc.polylines[0].points
     assert doc.metadata.get("unsupported_commands") is None
@@ -119,9 +110,7 @@ def test_arc_absolute_uses_chord_angle_and_updates_position():
 
 
 def test_arc_relative_supports_negative_sweep():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PU10,0;PD;AR-10,0,-90,45;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PU10,0;PD;AR-10,0,-90,45;PU;")
 
     points = doc.polylines[0].points
     assert len(points) == 3
@@ -130,9 +119,7 @@ def test_arc_relative_supports_negative_sweep():
 
 
 def test_pen_up_arc_moves_without_drawing():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PU10,0;AA0,0,90,45;PD0,20;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PU10,0;AA0,0,90,45;PD0,20;PU;")
 
     assert len(doc.polylines) == 1
     points = doc.polylines[0].points
@@ -142,9 +129,7 @@ def test_pen_up_arc_moves_without_drawing():
 
 
 def test_circle_draws_automatically_and_preserves_center_position():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;SP3;PU5,6;CI2,90;PD7,6;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;SP3;PU5,6;CI2,90;PD7,6;PU;")
 
     circle, line = doc.polylines
     assert circle.pen == 3
@@ -164,9 +149,7 @@ def test_negative_circle_radius_starts_at_180_degrees():
 
 
 def test_edge_rectangle_absolute_draws_outline_and_restores_position_and_pen():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;SP2;PA10,20;PD;EA30,50;PD40,20;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;SP2;PA10,20;PD;EA30,50;PD40,20;PU;")
 
     rectangle, line = doc.polylines
     assert doc.metadata.get("unsupported_commands") is None
@@ -185,9 +168,7 @@ def test_edge_rectangle_absolute_draws_outline_and_restores_position_and_pen():
 
 
 def test_fill_rectangle_absolute_uses_dense_serpentine_and_restores_position():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;PA1,2;RA2,2.5;PD3,2;PU;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;PA1,2;RA2,2.5;PD3,2;PU;")
 
     fill, line = doc.polylines
     assert doc.metadata.get("unsupported_commands") is None
@@ -199,13 +180,16 @@ def test_fill_rectangle_absolute_uses_dense_serpentine_and_restores_position():
         (3.0, 2.0),
     ]
     row_positions = {round(point.y, 6) for point in fill.points}
-    assert max(
-        upper - lower
-        for lower, upper in zip(
-            sorted(row_positions),
-            sorted(row_positions)[1:],
+    assert (
+        max(
+            upper - lower
+            for lower, upper in zip(
+                sorted(row_positions),
+                sorted(row_positions)[1:],
+            )
         )
-    ) <= HPGLParser.SOLID_FILL_SPACING_MM
+        <= HPGLParser.SOLID_FILL_SPACING_MM
+    )
 
 
 def test_fill_rectangle_uses_spacing_for_active_pen():
@@ -217,10 +201,7 @@ def test_fill_rectangle_uses_spacing_for_active_pen():
     fill = doc.polylines[0]
     row_positions = sorted({round(point.y, 6) for point in fill.points})
     assert len(row_positions) == 6
-    assert max(
-        upper - lower
-        for lower, upper in zip(row_positions, row_positions[1:])
-    ) <= 0.2 + 1e-9
+    assert max(upper - lower for lower, upper in pairwise(row_positions)) <= 0.2 + 1e-9
     assert doc.metadata["ra_pens"] == [3]
 
 

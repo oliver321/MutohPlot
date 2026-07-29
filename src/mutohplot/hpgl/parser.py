@@ -23,6 +23,7 @@ class PlotState:
     carriage_return_x_units: float = 0.0
     carriage_return_y_units: float = 0.0
 
+
 class HPGLParser:
     SOLID_FILL_SPACING_MM = 0.3
 
@@ -130,7 +131,7 @@ class HPGLParser:
         if len(args) % 2:
             raise ValueError("Odd coordinate count")
         for i in range(0, len(args), 2):
-            x, y = args[i], args[i+1]
+            x, y = args[i], args[i + 1]
             if state.absolute:
                 state.x_units, state.y_units = x, y
             else:
@@ -178,12 +179,10 @@ class HPGLParser:
 
         if lines:
             carriage_x_mm = (
-                state.carriage_return_x_units * self.source_unit_mm
-                + perpendicular_x * line_mm
+                state.carriage_return_x_units * self.source_unit_mm + perpendicular_x * line_mm
             )
             carriage_y_mm = (
-                state.carriage_return_y_units * self.source_unit_mm
-                + perpendicular_y * line_mm
+                state.carriage_return_y_units * self.source_unit_mm + perpendicular_y * line_mm
             )
             state.carriage_return_x_units = carriage_x_mm / self.source_unit_mm
             state.carriage_return_y_units = carriage_y_mm / self.source_unit_mm
@@ -207,10 +206,7 @@ class HPGLParser:
         state.carriage_return_y_units = state.y_units
 
     def _point(self, state):
-        return Point(
-            state.x_units * self.source_unit_mm,
-            state.y_units * self.source_unit_mm
-        )
+        return Point(state.x_units * self.source_unit_mm, state.y_units * self.source_unit_mm)
 
     def _arc(self, name, args, state, doc, current):
         if len(args) not in {3, 4}:
@@ -337,17 +333,13 @@ class HPGLParser:
             rows = max(1, ceil(height_mm / spacing_mm))
             for row in range(rows + 1):
                 y_mm = y1_mm + (y2_mm - y1_mm) * row / rows
-                start_x_mm, end_x_mm = (
-                    (x1_mm, x2_mm) if row % 2 == 0 else (x2_mm, x1_mm)
-                )
+                start_x_mm, end_x_mm = (x1_mm, x2_mm) if row % 2 == 0 else (x2_mm, x1_mm)
                 points.extend([Point(start_x_mm, y_mm), Point(end_x_mm, y_mm)])
         else:
             columns = max(1, ceil(width_mm / spacing_mm))
             for column in range(columns + 1):
                 x_mm = x1_mm + (x2_mm - x1_mm) * column / columns
-                start_y_mm, end_y_mm = (
-                    (y1_mm, y2_mm) if column % 2 == 0 else (y2_mm, y1_mm)
-                )
+                start_y_mm, end_y_mm = (y1_mm, y2_mm) if column % 2 == 0 else (y2_mm, y1_mm)
                 points.extend([Point(x_mm, start_y_mm), Point(x_mm, end_y_mm)])
         return points
 
@@ -401,22 +393,18 @@ class HPGLParser:
                             [
                                 Point(
                                     origin_x_mm
-                                    + direction_x
-                                    * (start_along_mm + slant_offset_mm)
+                                    + direction_x * (start_along_mm + slant_offset_mm)
                                     + perpendicular_x * across_mm,
                                     baseline_y_mm
-                                    + direction_y
-                                    * (start_along_mm + slant_offset_mm)
+                                    + direction_y * (start_along_mm + slant_offset_mm)
                                     + perpendicular_y * across_mm,
                                 ),
                                 Point(
                                     origin_x_mm
-                                    + direction_x
-                                    * (end_along_mm + slant_offset_mm)
+                                    + direction_x * (end_along_mm + slant_offset_mm)
                                     + perpendicular_x * across_mm,
                                     baseline_y_mm
-                                    + direction_y
-                                    * (end_along_mm + slant_offset_mm)
+                                    + direction_y * (end_along_mm + slant_offset_mm)
                                     + perpendicular_y * across_mm,
                                 ),
                             ],
@@ -432,7 +420,6 @@ class HPGLParser:
         state.y_units = (
             baseline_y_mm + direction_y * cursor_mm + perpendicular_y * line_offset_mm
         ) / self.source_unit_mm
-        return None
 
     @staticmethod
     def _chord_angle(value):

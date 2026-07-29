@@ -7,15 +7,11 @@ from mutohplot.hpgl.writer import HPGLWriter
 
 def test_relative_hpgl():
     doc = HPGLParser(1.0).parse_text("IN;PA10,20;PD;PR5,-2,5,2;PU;")
-    assert [(p.x,p.y) for p in doc.polylines[0].points] == [
-        (10,20),(15,18),(20,20)
-    ]
+    assert [(p.x, p.y) for p in doc.polylines[0].points] == [(10, 20), (15, 18), (20, 20)]
 
 
 def test_arc_and_circle_are_written_as_mutoh_polylines():
-    doc = HPGLParser(1.0).parse_text(
-        "IN;SP2;PU10,0;PD;AA0,0,90,45;PU20,20;CI5,90;"
-    )
+    doc = HPGLParser(1.0).parse_text("IN;SP2;PU10,0;PD;AA0,0,90,45;PU20,20;CI5,90;")
 
     hpgl = HPGLWriter(MutohXP500(unit_mm=1.0)).write(doc)
 

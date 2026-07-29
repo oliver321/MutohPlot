@@ -1,5 +1,6 @@
 from mutohplot.calibration import create_a3_calibration
 
+
 def test_a3_calibration_document():
     doc = create_a3_calibration("norm", 5)
     assert doc.metadata["paper"] == "A3"

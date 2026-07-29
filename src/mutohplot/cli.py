@@ -222,16 +222,12 @@ def pen_width(value: str) -> tuple[int, float]:
         pen = int(pen_text)
         width = float(width_text)
     except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(
-            "expected PEN=MM, for example 1=0.5"
-        ) from error
+        raise argparse.ArgumentTypeError("expected PEN=MM, for example 1=0.5") from error
     if not 1 <= pen <= 8:
         raise argparse.ArgumentTypeError("pen number must be between 1 and 8")
     if width not in SUPPORTED_PEN_WIDTHS_MM:
         choices = ", ".join(f"{item:g}" for item in SUPPORTED_PEN_WIDTHS_MM)
-        raise argparse.ArgumentTypeError(
-            f"pen width must be one of: {choices} mm"
-        )
+        raise argparse.ArgumentTypeError(f"pen width must be one of: {choices} mm")
     return pen, width
 
 
@@ -243,9 +239,7 @@ def add_pen_width_arguments(command_parser) -> None:
         type=pen_width,
         metavar="PEN=MM",
         default=[],
-        help=(
-            "override a physical pen width from the selected profile; repeat as needed"
-        ),
+        help=("override a physical pen width from the selected profile; repeat as needed"),
     )
     command_parser.add_argument(
         "--default-pen-width",
@@ -315,10 +309,7 @@ def report_ra_fill(document, args) -> None:
     for pen in ra_pens:
         width = widths[pen]
         spacing = width * profile.fill_spacing_factor
-        print(
-            f"RA fill: pen {pen}, width={width:.1f} mm, "
-            f"paper spacing<={spacing:.3f} mm"
-        )
+        print(f"RA fill: pen {pen}, width={width:.1f} mm, paper spacing<={spacing:.3f} mm")
 
 
 def stats(document, transform, original_bounds=None, fit_scale=None, fit_rotation=0):
@@ -329,22 +320,14 @@ def stats(document, transform, original_bounds=None, fit_scale=None, fit_rotatio
         x0, y0, x1, y1 = document.bounds()
         if original_bounds is not None:
             ox0, oy0, ox1, oy1 = original_bounds
-            print(
-                f"Original input bounds: x={ox0:.2f}..{ox1:.2f} mm, "
-                f"y={oy0:.2f}..{oy1:.2f} mm"
-            )
+            print(f"Original input bounds: x={ox0:.2f}..{ox1:.2f} mm, y={oy0:.2f}..{oy1:.2f} mm")
             print(f"Fit scale: {fit_scale:.6f} ({fit_scale * 100:.2f}%)")
             print(f"Fit rotation: {fit_rotation} degrees")
-            print(
-                f"Fitted page bounds: x={x0:.2f}..{x1:.2f} mm, "
-                f"y={y0:.2f}..{y1:.2f} mm"
-            )
+            print(f"Fitted page bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
         else:
             print(f"Input bounds: x={x0:.2f}..{x1:.2f} mm, y={y0:.2f}..{y1:.2f} mm")
         output_points = [
-            transform.apply(point)
-            for polyline in document.polylines
-            for point in polyline.points
+            transform.apply(point) for polyline in document.polylines for point in polyline.points
         ]
         first_values = [point.x for point in output_points]
         second_values = [point.y for point in output_points]
@@ -363,17 +346,12 @@ def _counter_summary(items):
 def inspect_document(path, document):
     commands = document.metadata.get("hpgl_commands", [])
     unsupported = document.metadata.get("unsupported_commands", [])
-    unsupported_characters = document.metadata.get(
-        "unsupported_label_characters", []
-    )
+    unsupported_characters = document.metadata.get("unsupported_label_characters", [])
     pens = sorted({polyline.pen for polyline in document.polylines})
 
     print(f"File: {path}")
     print(f"Commands: {_counter_summary(commands) if commands else 'none'}")
-    print(
-        "Unsupported: "
-        + (_counter_summary(unsupported) if unsupported else "none")
-    )
+    print("Unsupported: " + (_counter_summary(unsupported) if unsupported else "none"))
     if unsupported_characters:
         print(
             "Unsupported LB characters: "
@@ -465,13 +443,9 @@ def convert_hpgl(args, input_path, preview_path=None):
 
     unsupported = Counter(document.metadata.get("unsupported_commands", []))
     if unsupported:
-        summary = ", ".join(
-            f"{name} ({count})" for name, count in sorted(unsupported.items())
-        )
+        summary = ", ".join(f"{name} ({count})" for name, count in sorted(unsupported.items()))
         print(f"Warning: Unsupported HP-GL commands: {summary}", file=sys.stderr)
-    unsupported_characters = Counter(
-        document.metadata.get("unsupported_label_characters", [])
-    )
+    unsupported_characters = Counter(document.metadata.get("unsupported_label_characters", []))
     if unsupported_characters:
         summary = ", ".join(
             f"{character!r} ({count})"
@@ -487,7 +461,11 @@ def convert_hpgl(args, input_path, preview_path=None):
     fit_rotation = 0
     if args.fit:
         original_bounds = document.bounds()
-        if getattr(args, "swap_axes", False) or getattr(args, "flip_first", False) or getattr(args, "flip_second", False):
+        if (
+            getattr(args, "swap_axes", False)
+            or getattr(args, "flip_first", False)
+            or getattr(args, "flip_second", False)
+        ):
             raise SystemExit(
                 "--fit determines axis swapping and direction automatically; "
                 "do not combine it with --swap-axes, --flip-first, or --flip-second"
@@ -500,13 +478,9 @@ def convert_hpgl(args, input_path, preview_path=None):
         )
         fit_rotation = args.rotate
         if args.auto_rotate and document.bounds() is not None:
-            normal_fit = fit_document_to_area(
-                document, area, paper.width_mm, paper.height_mm
-            )
+            normal_fit = fit_document_to_area(document, area, paper.width_mm, paper.height_mm)
             rotated = rotate_document(document, 90)
-            rotated_fit = fit_document_to_area(
-                rotated, area, paper.width_mm, paper.height_mm
-            )
+            rotated_fit = fit_document_to_area(rotated, area, paper.width_mm, paper.height_mm)
             if rotated_fit.scale > normal_fit.scale:
                 document = rotated
                 fit_rotation = 90
@@ -542,11 +516,7 @@ def convert_hpgl(args, input_path, preview_path=None):
         if args.report:
             print(f"Fit rotation: {fit_rotation} degrees")
             report_ra_fill(document, args)
-            print(
-                transformation_report(
-                    document, paper, profile, area, args.margin, fit.scale
-                )
-            )
+            print(transformation_report(document, paper, profile, area, args.margin, fit.scale))
     else:
         swap_axes = getattr(args, "swap_axes", False)
         a, b, c, d = (0, 1, 1, 0) if swap_axes else (1, 0, 0, 1)
@@ -554,9 +524,7 @@ def convert_hpgl(args, input_path, preview_path=None):
             a, b = -a, -b
         if getattr(args, "flip_second", False):
             c, d = -c, -d
-        transform = CoordinateTransform(
-            a, b, c, d, args.offset_first, args.offset_second
-        )
+        transform = CoordinateTransform(a, b, c, d, args.offset_first, args.offset_second)
         if args.report:
             report_ra_fill(document, args)
 
@@ -564,13 +532,9 @@ def convert_hpgl(args, input_path, preview_path=None):
 
     if preview_path:
         if args.fit:
-            preview_document = bottom_left_document_in_paper_coordinates(
-                document, paper
-            )
+            preview_document = bottom_left_document_in_paper_coordinates(document, paper)
         else:
-            preview_document = document_in_paper_coordinates(
-                document, transform, paper
-            )
+            preview_document = document_in_paper_coordinates(document, transform, paper)
         Path(preview_path).parent.mkdir(parents=True, exist_ok=True)
         write_preview(
             preview_document,
@@ -584,14 +548,9 @@ def convert_hpgl(args, input_path, preview_path=None):
     if args.optimize:
         before = document.pen_up_distance_mm()
         document = optimize_nearest(document, not args.no_reverse)
-        print(
-            f"Pen-up optimization: {before:.1f} mm -> "
-            f"{document.pen_up_distance_mm():.1f} mm"
-        )
+        print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
 
-    max_chars = BUFFER_PROFILES[
-        getattr(args, "buffer_profile", "large")
-    ].hpgl_command_chars
+    max_chars = BUFFER_PROFILES[getattr(args, "buffer_profile", "large")].hpgl_command_chars
     output = HPGLWriter(
         MutohXP500(unit_mm=args.device_unit),
         transform,
@@ -610,21 +569,50 @@ def main():
             raise SystemExit(f"Pen configuration error: {error}") from error
 
     if args.command == "ports":
-        items=list_serial_ports()
-        if not items: print("No serial ports found")
-        for item in items: print(f"{item['device']}: {item['description']} {item['hwid']}".strip())
+        items = list_serial_ports()
+        if not items:
+            print("No serial ports found")
+        for item in items:
+            print(f"{item['device']}: {item['description']} {item['hwid']}".strip())
         return
     if args.command == "serial-status":
-        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=args.timeout,write_timeout_s=args.timeout)
-        for k,v in serial_status(s).items(): print(f"{k}: {v}")
+        s = SerialSettings(
+            args.port,
+            args.baud,
+            xonxoff=not args.no_xonxoff,
+            rtscts=args.rtscts,
+            dsrdtr=args.dsrdtr,
+            timeout_s=args.timeout,
+            write_timeout_s=args.timeout,
+        )
+        for k, v in serial_status(s).items():
+            print(f"{k}: {v}")
         return
     if args.command == "send":
-        s=SerialSettings(args.port,args.baud,xonxoff=not args.no_xonxoff,rtscts=args.rtscts,dsrdtr=args.dsrdtr,timeout_s=30.0,write_timeout_s=args.timeout)
-        profile=BUFFER_PROFILES[args.buffer_profile]; size=Path(args.input).stat().st_size
-        print(f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}, write-timeout={args.timeout if args.timeout is not None else 'unlimited'}")
-        if args.dry_run: print(f"Dry run: {size} bytes would be sent"); return
-        def progress(sent,total):
-            if args.progress: print(f"\rSending: {int(sent*100/total):3d}% ({sent}/{total})",end="",flush=True)
+        s = SerialSettings(
+            args.port,
+            args.baud,
+            xonxoff=not args.no_xonxoff,
+            rtscts=args.rtscts,
+            dsrdtr=args.dsrdtr,
+            timeout_s=30.0,
+            write_timeout_s=args.timeout,
+        )
+        profile = BUFFER_PROFILES[args.buffer_profile]
+        size = Path(args.input).stat().st_size
+        print(
+            f"Port={args.port}, baud={args.baud}, 8N1, XON/XOFF={s.xonxoff}, RTS/CTS={s.rtscts}, DTR/DSR={s.dsrdtr}, profile={profile.name}, chunk={profile.chunk_size}, write-timeout={args.timeout if args.timeout is not None else 'unlimited'}"
+        )
+        if args.dry_run:
+            print(f"Dry run: {size} bytes would be sent")
+            return
+
+        def progress(sent, total):
+            if args.progress:
+                print(
+                    f"\rSending: {int(sent * 100 / total):3d}% ({sent}/{total})", end="", flush=True
+                )
+
         try:
             sent = send_file(args.input, s, args.buffer_profile, progress)
         except KeyboardInterrupt:
@@ -649,14 +637,10 @@ def main():
                 document = HPGLParser(
                     args.source_unit,
                     ra_fill_spacings(args),
-                ).parse_text(
-                    input_path.read_text(errors="replace")
-                )
+                ).parse_text(input_path.read_text(errors="replace"))
                 apply_pen_colors(document, pen_profile(args))
             except ValueError as error:
-                raise SystemExit(
-                    f"Failed to inspect {input_path}: {error}"
-                ) from error
+                raise SystemExit(f"Failed to inspect {input_path}: {error}") from error
             inspect_document(input_path, document)
             strict_failure = strict_failure or bool(
                 document.metadata.get("unsupported_commands")
@@ -730,9 +714,7 @@ def main():
             preview_path = None
             if args.preview:
                 preview_path = (
-                    preview_dir / f"{input_path.stem}_preview.svg"
-                    if batch
-                    else Path(args.preview)
+                    preview_dir / f"{input_path.stem}_preview.svg" if batch else Path(args.preview)
                 )
             output, document, transform, original, scale, rotation = convert_hpgl(
                 args, input_path, preview_path
@@ -799,7 +781,10 @@ def main():
         auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
         auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
         transform = CoordinateTransform(
-            base.a, base.b, base.c, base.d,
+            base.a,
+            base.b,
+            base.c,
+            base.d,
             base.tx + auto_first + args.offset_first,
             base.ty + auto_second + args.offset_second,
         )
@@ -810,7 +795,9 @@ def main():
 
     else:
         pen_map = json.loads(Path(args.pen_map).read_text()) if args.pen_map else None
-        document = SVGReader(args.curve_steps, pen_map=pen_map, layer_pens=not args.no_layer_pens).read(args.input)
+        document = SVGReader(
+            args.curve_steps, pen_map=pen_map, layer_pens=not args.no_layer_pens
+        ).read(args.input)
         paper = get_paper(args.paper, args.landscape)
         profile = get_hard_clip(args.window)
         hard = drawable_area(paper, profile, 0)
@@ -824,14 +811,19 @@ def main():
 
         check = check_bounds(document, area)
         if args.strict_bounds and not check.inside:
-            raise SystemExit(transformation_report(document, paper, profile, area, args.margin, fit_scale))
+            raise SystemExit(
+                transformation_report(document, paper, profile, area, args.margin, fit_scale)
+            )
 
         base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
         correction = hard_clip_center_correction(profile)
         auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm
         auto_second = 0.0 if args.no_hardclip_correction else correction.second_mm
         transform = CoordinateTransform(
-            base.a, base.b, base.c, base.d,
+            base.a,
+            base.b,
+            base.c,
+            base.d,
             base.tx + auto_first + args.offset_first,
             base.ty + auto_second + args.offset_second,
         )
@@ -843,15 +835,23 @@ def main():
 
     if args.command == "svg" and not args.no_geometry_optimize:
         document, gs = optimize_geometry(document, args.quality)
-        print(f"Geometry optimization: {gs.points_before} -> {gs.points_after} points ({gs.reduction_percent:.1f}% reduction, quality={args.quality})")
+        print(
+            f"Geometry optimization: {gs.points_before} -> {gs.points_after} points ({gs.reduction_percent:.1f}% reduction, quality={args.quality})"
+        )
 
     if getattr(args, "optimize", False):
         before = document.pen_up_distance_mm()
         document = optimize_nearest(document, not args.no_reverse)
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
 
-    max_chars = args.max_command_chars if args.command == "svg" and args.max_command_chars else BUFFER_PROFILES["large"].hpgl_command_chars
-    output = HPGLWriter(MutohXP500(unit_mm=args.device_unit), transform, max_command_chars=max_chars).write(document)
+    max_chars = (
+        args.max_command_chars
+        if args.command == "svg" and args.max_command_chars
+        else BUFFER_PROFILES["large"].hpgl_command_chars
+    )
+    output = HPGLWriter(
+        MutohXP500(unit_mm=args.device_unit), transform, max_command_chars=max_chars
+    ).write(document)
     Path(args.output).write_text(output, encoding="ascii")
     print(f"Wrote {args.output}")
 

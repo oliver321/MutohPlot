@@ -11,7 +11,10 @@ def test_a3_norm_top_left_maps_with_automatic_offset():
     base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
     correction = hard_clip_center_correction(profile)
     transform = CoordinateTransform(
-        base.a, base.b, base.c, base.d,
+        base.a,
+        base.b,
+        base.c,
+        base.d,
         base.tx + correction.first_mm,
         base.ty + correction.second_mm,
     )

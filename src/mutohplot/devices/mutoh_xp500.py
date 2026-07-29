@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+
 from .base import DeviceProfile
+
 
 @dataclass(frozen=True, slots=True)
 class MutohXP500(DeviceProfile):

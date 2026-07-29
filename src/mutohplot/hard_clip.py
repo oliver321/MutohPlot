@@ -88,8 +88,7 @@ def drawable_area(
     )
     if area.width_mm <= 0 or area.height_mm <= 0:
         raise ValueError(
-            "Hard-clip margins and additional margin leave no drawable area "
-            f"on {paper.name}"
+            f"Hard-clip margins and additional margin leave no drawable area on {paper.name}"
         )
     return area
 

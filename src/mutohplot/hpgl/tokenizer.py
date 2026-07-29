@@ -1,6 +1,5 @@
 from .tokens import Command
 
-
 NUMERIC_COMMANDS = {
     "AA",
     "AR",
@@ -35,7 +34,7 @@ class HPGLTokenizer:
             if len(cleaned) - index < 2:
                 raise ValueError(f"Invalid HPGL command: {cleaned[index:]!r}")
 
-            name = cleaned[index:index + 2].upper()
+            name = cleaned[index : index + 2].upper()
             index += 2
             if name == "LB":
                 payload_start = index

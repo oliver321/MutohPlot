@@ -5,6 +5,7 @@ from mutohplot.hard_clip import drawable_area, get_hard_clip
 from mutohplot.paper import get_paper
 from mutohplot.report import check_bounds, transformation_report
 
+
 def test_bounds_report_inside_and_outside():
     paper = get_paper("a3")
     profile = get_hard_clip("norm")

@@ -14,13 +14,17 @@ from mutohplot.pen_config import (
 
 
 def write_profile(path: Path, *, duplicate_pen: bool = False) -> None:
-    second_group = """
+    second_group = (
+        """
 [pen-groups.duplicate]
 pens = [1]
 type = "fiber"
 width-mm = 0.3
 color = "red"
-""" if duplicate_pen else ""
+"""
+        if duplicate_pen
+        else ""
+    )
     path.write_text(
         f"""
 [profile]
@@ -132,9 +136,7 @@ def test_duplicate_pen_group_assignment_is_an_error(tmp_path):
         load_pen_profile(config)
 
 
-def test_main_reports_configuration_error_for_missing_file(
-    tmp_path, monkeypatch
-):
+def test_main_reports_configuration_error_for_missing_file(tmp_path, monkeypatch):
     source = tmp_path / "input.hpgl"
     source.write_text("IN;PU0,0;PD10,10;", encoding="ascii")
     missing = tmp_path / "missing.toml"

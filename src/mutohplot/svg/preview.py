@@ -37,12 +37,18 @@ def write_preview(
         y = paper.height_mm / 2.0
         lines.extend(
             [
-                f'<line x1="{x - 4}" y1="{y}" x2="{x + 4}" y2="{y}" '
-                'stroke="#7a3db8" stroke-width="0.5"/>',
-                f'<line x1="{x}" y1="{y - 4}" x2="{x}" y2="{y + 4}" '
-                'stroke="#7a3db8" stroke-width="0.5"/>',
-                f'<circle cx="{x}" cy="{y}" r="1.2" fill="none" '
-                'stroke="#7a3db8" stroke-width="0.4"/>',
+                (
+                    f'<line x1="{x - 4}" y1="{y}" x2="{x + 4}" y2="{y}" '
+                    'stroke="#7a3db8" stroke-width="0.5"/>'
+                ),
+                (
+                    f'<line x1="{x}" y1="{y - 4}" x2="{x}" y2="{y + 4}" '
+                    'stroke="#7a3db8" stroke-width="0.5"/>'
+                ),
+                (
+                    f'<circle cx="{x}" cy="{y}" r="1.2" fill="none" '
+                    'stroke="#7a3db8" stroke-width="0.4"/>'
+                ),
             ]
         )
     palette = ["#000000", "#d22", "#268", "#282", "#a2a", "#d80", "#088", "#555"]

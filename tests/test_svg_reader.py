@@ -6,6 +6,7 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm">
 <path d="M 0 25 L 100 25"/>
 </svg>"""
 
+
 def test_svg_primitives():
     doc = SVGReader().read_text(SVG)
     assert doc.metadata["page_width_mm"] == 100.0

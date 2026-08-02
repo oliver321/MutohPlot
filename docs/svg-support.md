@@ -1,4 +1,4 @@
-# SVG support in v0.0.3
+# SVG support
 
 Supported elements:
 - line
@@ -19,13 +19,13 @@ Supported path commands:
 - H/h
 - V/v
 - C/c
+- S/s
 - Q/q
+- T/t
+- A/a
 - Z/z
 
 Not yet supported:
-- S/s
-- T/t
-- A/a
 - text
-- clip paths
+- applying clip-path geometry (definitions themselves are correctly ignored)
 - CSS-based visibility and styling

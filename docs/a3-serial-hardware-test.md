@@ -99,6 +99,11 @@ Die Beobachtungen für beide Pufferprofile vor Merge und Release-Tag im Pull Req
 
 ## XON/XOFF-Pause mit LOCAL/REMOTE testen
 
+MutohPlot öffnet den Adapter ohne den fehleranfälligen Kernel-IXON-Zustand
+des PL2303 und verarbeitet `XOFF` (`0x13`) sowie `XON` (`0x11`) selbst. Dadurch
+beginnt ein neuer Prozess mit freigegebener Schnittstelle, echte Pausen des
+Plotters bleiben aber weiterhin unbegrenzt wirksam.
+
 Für diesen Test den Plotter mit dem 1000-Zeichen-Puffer zunächst auf LOCAL stellen und eine ausreichend große HP-GL-Datei senden:
 
 ```bash
@@ -111,5 +116,16 @@ Erwartetes Verhalten:
 - MutohPlot meldet keinen Schreib-Timeout, sondern wartet auf XON.
 - Nach dem Umschalten auf REMOTE wird dieselbe Übertragung automatisch fortgesetzt.
 - `Ctrl+C` bricht die wartende Übertragung kontrolliert ab und schließt den Port.
+
+## Neustart nach einer XOFF-Pause testen
+
+1. Eine laufende Übertragung durch LOCAL/XOFF pausieren.
+2. MutohPlot beenden und den Plotter neu starten.
+3. Den Plotter wieder auf REMOTE stellen.
+4. Den Sendevorgang neu starten.
+
+Der neue Prozess darf keinen Stopzustand des vorherigen Prozesses erben und
+muss sofort mit der Übertragung beginnen. Ein danach empfangenes echtes XOFF
+muss den neuen Lauf weiterhin bis zum nächsten XON pausieren.
 
 Nur wenn ausdrücklich ein zeitlich begrenzter Schreibstillstand gewünscht ist, kann `--timeout SEKUNDEN` angegeben werden.

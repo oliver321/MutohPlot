@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,9 +125,21 @@ def read_flow_control(connection, paused: bool) -> bool:
     return paused
 
 
-def wait_until_resumed(connection, paused: bool, sleeper=sleep) -> bool:
+def wait_until_resumed(
+    connection,
+    paused: bool,
+    timeout_s: float | None = None,
+    port: str = "serial port",
+    sleeper=sleep,
+    clock=monotonic,
+) -> bool:
     paused = read_flow_control(connection, paused)
+    pause_started = clock() if paused else None
     while paused:
+        if timeout_s is not None and clock() - pause_started >= timeout_s:
+            raise SerialTransmissionError(
+                f"XOFF pause on {port} exceeded write timeout of {timeout_s:g} seconds"
+            )
         sleeper(FLOW_CONTROL_POLL_S)
         paused = read_flow_control(connection, paused)
     return paused
@@ -141,7 +153,13 @@ def send_bytes(data, settings, profile, progress=None, connection_factory=None, 
         prepare_transmission(connection, settings)
         while sent < len(data):
             if settings.xonxoff:
-                paused = wait_until_resumed(connection, paused, sleeper)
+                paused = wait_until_resumed(
+                    connection,
+                    paused,
+                    settings.write_timeout_s,
+                    settings.port,
+                    sleeper,
+                )
             block = data[sent : sent + profile.chunk_size]
             try:
                 written = connection.write(block)

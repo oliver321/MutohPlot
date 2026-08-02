@@ -5,6 +5,7 @@ from mutohplot.serial_io import (
     SerialSettings,
     SerialTransmissionError,
     send_bytes,
+    wait_until_resumed,
 )
 
 
@@ -206,3 +207,21 @@ def test_latest_flow_control_character_wins():
     )
 
     assert sent == 3
+
+
+def test_userspace_xoff_honors_configured_timeout():
+    fake = Fake(incoming=b"\x13")
+    times = iter((0.0, 0.0, 1.0))
+
+    with pytest.raises(
+        SerialTransmissionError,
+        match=r"XOFF pause on /dev/fake exceeded write timeout of 1 seconds",
+    ):
+        wait_until_resumed(
+            fake,
+            False,
+            timeout_s=1.0,
+            port="/dev/fake",
+            sleeper=lambda _: None,
+            clock=lambda: next(times),
+        )

@@ -85,7 +85,11 @@ def parser():
     hpgl.add_argument("--margin", type=float, default=0.0)
     hpgl.add_argument("--no-hardclip-correction", action="store_true")
     hpgl.add_argument("--report", action="store_true")
-    hpgl.add_argument("--optimize", action="store_true")
+    hpgl.add_argument(
+        "--optimize",
+        action="store_true",
+        help="remove duplicate same-pen lines and optimize pen-up travel",
+    )
     hpgl.add_argument("--no-reverse", action="store_true")
     hpgl.add_argument("--stats", action="store_true")
     add_pen_width_arguments(hpgl)
@@ -119,7 +123,11 @@ def parser():
     svg.add_argument("--offset-first", type=float, default=0.0)
     svg.add_argument("--offset-second", type=float, default=0.0)
     svg.add_argument("--no-hardclip-correction", action="store_true")
-    svg.add_argument("--optimize", action="store_true")
+    svg.add_argument(
+        "--optimize",
+        action="store_true",
+        help="remove duplicate same-pen lines and optimize pen-up travel",
+    )
     svg.add_argument("--quality", choices=sorted(QUALITY_PROFILES), default="normal")
     svg.add_argument("--no-geometry-optimize", action="store_true")
     svg.add_argument("--max-command-chars", type=int)
@@ -189,7 +197,11 @@ def parser():
     plot.add_argument("--offset-first", type=float, default=0.0)
     plot.add_argument("--offset-second", type=float, default=0.0)
     plot.add_argument("--no-hardclip-correction", action="store_true")
-    plot.add_argument("--optimize", action="store_true")
+    plot.add_argument(
+        "--optimize",
+        action="store_true",
+        help="remove duplicate same-pen lines and optimize pen-up travel",
+    )
     plot.add_argument("--no-reverse", action="store_true")
     plot.add_argument("--report", action="store_true")
     plot.add_argument("--stats", action="store_true")
@@ -548,6 +560,8 @@ def convert_hpgl(args, input_path, preview_path=None):
     if args.optimize:
         before = document.pen_up_distance_mm()
         document = optimize_nearest(document, not args.no_reverse)
+        removed = document.metadata.get("duplicate_segments_removed", 0)
+        print(f"Duplicate line segments removed: {removed}")
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
 
     max_chars = BUFFER_PROFILES[getattr(args, "buffer_profile", "large")].hpgl_command_chars
@@ -842,6 +856,8 @@ def main():
     if getattr(args, "optimize", False):
         before = document.pen_up_distance_mm()
         document = optimize_nearest(document, not args.no_reverse)
+        removed = document.metadata.get("duplicate_segments_removed", 0)
+        print(f"Duplicate line segments removed: {removed}")
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
 
     max_chars = (

@@ -5,7 +5,7 @@ from .geometry import (
     optimize_geometry,
     point_count,
 )
-from .paths import optimize_nearest
+from .paths import optimize_nearest, remove_duplicate_segments
 
 __all__ = [
     "QUALITY_PROFILES",
@@ -14,4 +14,5 @@ __all__ = [
     "optimize_geometry",
     "optimize_nearest",
     "point_count",
+    "remove_duplicate_segments",
 ]

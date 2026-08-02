@@ -24,7 +24,7 @@ mutohplot svg drawing.svg drawing.hpgl \
   --paper a3 --window norm --fit --margin 5 \
   --quality normal --optimize --report --stats
 ```
-Qualitätsprofile: `precise` 0,02 mm, `normal` 0,05 mm, `fast` 0,10 mm, `draft` 0,20 mm. Mit `--no-geometry-optimize` bleibt die Geometrie unverändert.
+Qualitätsprofile: `precise` 0,02 mm, `normal` 0,05 mm, `fast` 0,10 mm, `draft` 0,20 mm. Mit `--no-geometry-optimize` bleibt die Geometrie unverändert. `--optimize` entfernt außerdem mehrfach vorhandene Linien desselben Stifts, auch wenn sie in Gegenrichtung gezeichnet werden, und optimiert danach die Leerwege.
 
 Bestehende HP-GL-Dateien mit dem üblichen Ursprung unten links werden mit
 `--fit` proportional in die verfügbare Zeichenfläche eingepasst, zentriert und

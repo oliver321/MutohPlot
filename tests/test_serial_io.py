@@ -11,9 +11,17 @@ from mutohplot.serial_io import (
 class Fake:
     def __init__(self, write_sizes=None):
         self.data = bytearray()
+        self.input_buffer_reset = False
+        self.output_flow_control = []
         self.flushed = False
         self.closed = False
         self.write_sizes = iter(write_sizes or [])
+
+    def reset_input_buffer(self):
+        self.input_buffer_reset = True
+
+    def set_output_flow_control(self, enable=True):
+        self.output_flow_control.append(enable)
 
     def write(self, block):
         try:
@@ -51,6 +59,8 @@ def test_send_and_progress():
     assert sent == 10
     assert bytes(fake.data) == b"1234567890"
     assert progress == [(10, 10)]
+    assert fake.input_buffer_reset
+    assert fake.output_flow_control == [True]
     assert fake.flushed and fake.closed
 
 
@@ -118,3 +128,41 @@ def test_keyboard_interrupt_closes_port():
 
 def test_default_write_timeout_allows_indefinite_xoff_pause():
     assert SerialSettings("/dev/fake").write_timeout_s is None
+
+
+def test_disabled_xonxoff_does_not_touch_software_flow_control():
+    fake = Fake()
+
+    send_bytes(
+        b"123",
+        SerialSettings("/dev/fake", xonxoff=False),
+        BUFFER_PROFILES["small"],
+        connection_factory=lambda _: fake,
+        sleeper=lambda _: None,
+    )
+
+    assert not fake.input_buffer_reset
+    assert fake.output_flow_control == []
+
+
+def test_xonxoff_reset_failure_closes_port_with_context():
+    class BrokenReset(Fake):
+        def set_output_flow_control(self, enable=True):
+            raise OSError("flow-control reset failed")
+
+    fake = BrokenReset()
+
+    with pytest.raises(
+        SerialTransmissionError,
+        match=r"reset XON/XOFF state on /dev/fake.*flow-control reset failed",
+    ):
+        send_bytes(
+            b"123",
+            SerialSettings("/dev/fake"),
+            BUFFER_PROFILES["small"],
+            connection_factory=lambda _: fake,
+            sleeper=lambda _: None,
+        )
+
+    assert fake.closed
+    assert not fake.data

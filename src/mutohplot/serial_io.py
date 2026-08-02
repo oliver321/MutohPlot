@@ -91,10 +91,30 @@ def serial_status(settings):
         connection.close()
 
 
+def prepare_transmission(connection, settings):
+    """Start a new XON/XOFF transmission with locally resumed output.
+
+    A previous process can be terminated while the POSIX terminal driver is in
+    the stopped state after receiving XOFF. The plotter may then be restarted
+    and never send the matching XON. Discard stale input and explicitly resume
+    local output so every new MutohPlot run starts from a free-port assumption.
+    """
+    if not settings.xonxoff:
+        return
+    try:
+        connection.reset_input_buffer()
+        connection.set_output_flow_control(True)
+    except (AttributeError, NotImplementedError, OSError) as error:
+        raise SerialTransmissionError(
+            f"Could not reset XON/XOFF state on {settings.port}: {error}"
+        ) from error
+
+
 def send_bytes(data, settings, profile, progress=None, connection_factory=None, sleeper=sleep):
     connection = (connection_factory or open_serial)(settings)
     sent = 0
     try:
+        prepare_transmission(connection, settings)
         while sent < len(data):
             block = data[sent : sent + profile.chunk_size]
             try:

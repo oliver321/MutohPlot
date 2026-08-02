@@ -9,6 +9,10 @@ Supported elements:
 - ellipse
 - path
 
+Nested element and group transforms are composed in SVG order. Geometry inside
+non-rendering definition containers such as `defs`, `clipPath`, `mask`, and
+`symbol` is not plotted directly.
+
 Supported path commands:
 - M/m
 - L/l

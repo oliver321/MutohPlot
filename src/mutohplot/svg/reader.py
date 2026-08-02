@@ -119,7 +119,10 @@ class SVGReader:
         return self.colors[c]
 
     def walk(self, e, parent, inherit, doc, layer=None):
-        m = parent.then(transform(e.get("transform")))
+        tag = e.tag.split("}")[-1]
+        if tag in {"defs", "clipPath", "mask", "metadata", "symbol"}:
+            return
+        m = transform(e.get("transform")).then(parent)
         s = dict(inherit)
         s.update(style(e.get("style")))
         current_layer = layer
@@ -129,7 +132,6 @@ class SVGReader:
         for k in ("stroke", "display", "visibility", "opacity", "stroke-opacity"):
             if e.get(k) is not None:
                 s[k] = e.get(k)
-        tag = e.tag.split("}")[-1]
         polys = []
         if self.visible(s):
             if tag == "line":

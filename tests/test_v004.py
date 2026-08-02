@@ -30,6 +30,42 @@ def test_optimizer():
     assert optimize_nearest(d).pen_up_distance_mm() < d.pen_up_distance_mm()
 
 
+def test_spatial_optimizer_matches_expected_nearest_path_order():
+    document = PlotDocument(
+        [
+            Polyline([Point(0, 0), Point(1, 0)]),
+            Polyline([Point(20, 0), Point(21, 0)]),
+            Polyline([Point(3, 0), Point(2, 0)]),
+            Polyline([Point(10, 0), Point(11, 0)]),
+        ]
+    )
+
+    output = optimize_nearest(document, deduplicate=False)
+
+    assert [polyline.points for polyline in output.polylines] == [
+        [Point(0, 0), Point(1, 0)],
+        [Point(2, 0), Point(3, 0)],
+        [Point(10, 0), Point(11, 0)],
+        [Point(20, 0), Point(21, 0)],
+    ]
+
+
+def test_optimizer_reports_progress_without_reporting_every_path():
+    document = PlotDocument(
+        [Polyline([Point(index, 0), Point(index + 0.5, 0)]) for index in range(250)]
+    )
+    updates = []
+
+    optimize_nearest(
+        document,
+        deduplicate=False,
+        progress=lambda current, total: updates.append((current, total)),
+    )
+
+    assert updates[-1] == (250, 250)
+    assert len(updates) <= 125
+
+
 def test_duplicate_segments_are_removed_in_both_directions():
     document = PlotDocument(
         [

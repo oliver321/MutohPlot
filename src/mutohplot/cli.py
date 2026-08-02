@@ -559,7 +559,17 @@ def convert_hpgl(args, input_path, preview_path=None):
 
     if args.optimize:
         before = document.pen_up_distance_mm()
-        document = optimize_nearest(document, not args.no_reverse)
+        print(f"Optimizing paths: {len(document.polylines)} polylines...", flush=True)
+        path_progress = lambda current, total: (
+            print(
+                f"\rOptimizing paths: {current * 100 // total:3d}% ({current}/{total})",
+                end="\n" if current == total else "",
+                flush=True,
+            )
+            if getattr(args, "progress", False)
+            else None
+        )
+        document = optimize_nearest(document, not args.no_reverse, progress=path_progress)
         removed = document.metadata.get("duplicate_segments_removed", 0)
         print(f"Duplicate line segments removed: {removed}")
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")
@@ -855,7 +865,17 @@ def main():
 
     if getattr(args, "optimize", False):
         before = document.pen_up_distance_mm()
-        document = optimize_nearest(document, not args.no_reverse)
+        print(f"Optimizing paths: {len(document.polylines)} polylines...", flush=True)
+        path_progress = lambda current, total: (
+            print(
+                f"\rOptimizing paths: {current * 100 // total:3d}% ({current}/{total})",
+                end="\n" if current == total else "",
+                flush=True,
+            )
+            if getattr(args, "progress", False)
+            else None
+        )
+        document = optimize_nearest(document, not args.no_reverse, progress=path_progress)
         removed = document.metadata.get("duplicate_segments_removed", 0)
         print(f"Duplicate line segments removed: {removed}")
         print(f"Pen-up optimization: {before:.1f} mm -> {document.pen_up_distance_mm():.1f} mm")

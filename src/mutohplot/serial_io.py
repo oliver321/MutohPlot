@@ -16,6 +16,10 @@ BUFFER_PROFILES = {
     "small": BufferProfile("small", 512, 0.02, 800),
 }
 
+XON = 0x11
+XOFF = 0x13
+FLOW_CONTROL_POLL_S = 0.05
+
 
 @dataclass(frozen=True, slots=True)
 class SerialSettings:
@@ -67,7 +71,10 @@ def open_serial(settings):
         stopbits=settings.stopbits,
         timeout=settings.timeout_s,
         write_timeout=settings.write_timeout_s,
-        xonxoff=settings.xonxoff,
+        # PL2303 adapters can retain a stopped 256-byte transmit buffer when
+        # kernel IXON is enabled. MutohPlot handles XON/XOFF in userspace so
+        # long plotter pauses remain supported without relying on that state.
+        xonxoff=False,
         rtscts=settings.rtscts,
         dsrdtr=settings.dsrdtr,
     )
@@ -79,7 +86,8 @@ def serial_status(settings):
         return {
             "port": connection.port,
             "baudrate": connection.baudrate,
-            "xonxoff": connection.xonxoff,
+            "xonxoff": settings.xonxoff,
+            "xonxoff_mode": "userspace" if settings.xonxoff else "disabled",
             "rtscts": connection.rtscts,
             "dsrdtr": connection.dsrdtr,
             "cts": bool(connection.cts),
@@ -92,30 +100,48 @@ def serial_status(settings):
 
 
 def prepare_transmission(connection, settings):
-    """Start a new XON/XOFF transmission with locally resumed output.
+    """Start a new userspace XON/XOFF transmission with clean input.
 
-    A previous process can be terminated while the POSIX terminal driver is in
-    the stopped state after receiving XOFF. The plotter may then be restarted
-    and never send the matching XON. Discard stale input and explicitly resume
-    local output so every new MutohPlot run starts from a free-port assumption.
+    The driver is opened without kernel IXON, so stale PL2303/TTY stop state does
+    not survive a process restart. MutohPlot still honors XOFF and XON itself.
     """
-    if not settings.xonxoff:
-        return
     try:
         connection.reset_input_buffer()
-        connection.set_output_flow_control(True)
-    except (AttributeError, NotImplementedError, OSError) as error:
+    except (AttributeError, OSError) as error:
         raise SerialTransmissionError(
             f"Could not reset XON/XOFF state on {settings.port}: {error}"
         ) from error
 
 
+def read_flow_control(connection, paused: bool) -> bool:
+    waiting = connection.in_waiting
+    if not waiting:
+        return paused
+    for value in connection.read(waiting):
+        if value == XOFF:
+            paused = True
+        elif value == XON:
+            paused = False
+    return paused
+
+
+def wait_until_resumed(connection, paused: bool, sleeper=sleep) -> bool:
+    paused = read_flow_control(connection, paused)
+    while paused:
+        sleeper(FLOW_CONTROL_POLL_S)
+        paused = read_flow_control(connection, paused)
+    return paused
+
+
 def send_bytes(data, settings, profile, progress=None, connection_factory=None, sleeper=sleep):
     connection = (connection_factory or open_serial)(settings)
     sent = 0
+    paused = False
     try:
         prepare_transmission(connection, settings)
         while sent < len(data):
+            if settings.xonxoff:
+                paused = wait_until_resumed(connection, paused, sleeper)
             block = data[sent : sent + profile.chunk_size]
             try:
                 written = connection.write(block)

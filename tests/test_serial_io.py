@@ -9,10 +9,10 @@ from mutohplot.serial_io import (
 
 
 class Fake:
-    def __init__(self, write_sizes=None):
+    def __init__(self, write_sizes=None, incoming=b""):
         self.data = bytearray()
+        self.incoming = bytearray(incoming)
         self.input_buffer_reset = False
-        self.output_flow_control = []
         self.flushed = False
         self.closed = False
         self.write_sizes = iter(write_sizes or [])
@@ -20,8 +20,14 @@ class Fake:
     def reset_input_buffer(self):
         self.input_buffer_reset = True
 
-    def set_output_flow_control(self, enable=True):
-        self.output_flow_control.append(enable)
+    @property
+    def in_waiting(self):
+        return len(self.incoming)
+
+    def read(self, size):
+        result = bytes(self.incoming[:size])
+        del self.incoming[:size]
+        return result
 
     def write(self, block):
         try:
@@ -60,7 +66,6 @@ def test_send_and_progress():
     assert bytes(fake.data) == b"1234567890"
     assert progress == [(10, 10)]
     assert fake.input_buffer_reset
-    assert fake.output_flow_control == [True]
     assert fake.flushed and fake.closed
 
 
@@ -130,7 +135,7 @@ def test_default_write_timeout_allows_indefinite_xoff_pause():
     assert SerialSettings("/dev/fake").write_timeout_s is None
 
 
-def test_disabled_xonxoff_does_not_touch_software_flow_control():
+def test_disabled_xonxoff_still_starts_with_clean_input():
     fake = Fake()
 
     send_bytes(
@@ -141,13 +146,13 @@ def test_disabled_xonxoff_does_not_touch_software_flow_control():
         sleeper=lambda _: None,
     )
 
-    assert not fake.input_buffer_reset
-    assert fake.output_flow_control == []
+    assert fake.input_buffer_reset
+    assert fake.closed
 
 
 def test_xonxoff_reset_failure_closes_port_with_context():
     class BrokenReset(Fake):
-        def set_output_flow_control(self, enable=True):
+        def reset_input_buffer(self):
             raise OSError("flow-control reset failed")
 
     fake = BrokenReset()
@@ -166,3 +171,38 @@ def test_xonxoff_reset_failure_closes_port_with_context():
 
     assert fake.closed
     assert not fake.data
+
+
+def test_userspace_xoff_pauses_until_xon():
+    fake = Fake(incoming=b"\x13")
+    sleeps = []
+
+    def resume_after_first_poll(delay):
+        sleeps.append(delay)
+        fake.incoming.append(0x11)
+
+    sent = send_bytes(
+        b"123",
+        SerialSettings("/dev/fake"),
+        BUFFER_PROFILES["large"],
+        connection_factory=lambda _: fake,
+        sleeper=resume_after_first_poll,
+    )
+
+    assert sent == 3
+    assert sleeps == [0.05]
+    assert bytes(fake.data) == b"123"
+
+
+def test_latest_flow_control_character_wins():
+    fake = Fake(incoming=b"\x13\x11")
+
+    sent = send_bytes(
+        b"123",
+        SerialSettings("/dev/fake"),
+        BUFFER_PROFILES["large"],
+        connection_factory=lambda _: fake,
+        sleeper=lambda _: pytest.fail("XON should have resumed transmission"),
+    )
+
+    assert sent == 3

@@ -124,10 +124,11 @@ mutohplot send drawing.hpgl /dev/ttyUSB0 --buffer-profile small --progress
 ```
 `large`: 16384-Byte-Blöcke. `small`: 512-Byte-Blöcke mit 20 ms Pause. Test ohne Senden: `--dry-run`. Die Übertragung kann mit `Ctrl+C` sicher abgebrochen werden; der serielle Port wird dabei geschlossen.
 
-Bei jedem neuen Sendevorgang verwirft MutohPlot veraltete Eingangsdaten und
-hebt einen eventuell vom vorherigen Prozess hinterlassenen lokalen XOFF-Stopp
-auf. Nach einem Neustart von MutohPlot oder Plotter beginnt die serielle
-Schnittstelle damit wieder im freigegebenen Zustand.
+MutohPlot behandelt XON/XOFF selbst, statt den fehleranfälligen IXON-Zustand
+des Linux-PL2303-Treibers zu verwenden. Ein neuer Prozess beginnt mit einer
+freigegebenen Schnittstelle, pausiert nach einem echten XOFF des Plotters aber
+weiterhin beliebig lange und setzt die Übertragung erst nach XON fort. Damit
+bleiben auch mehrminütige Pausen zum Auffüllen eines Stifts sicher.
 
 Der vollständige Ablauf für den A3-Hardwaretest steht unter [docs/a3-serial-hardware-test.md](docs/a3-serial-hardware-test.md).
 

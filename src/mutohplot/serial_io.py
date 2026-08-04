@@ -39,6 +39,10 @@ class SerialTransmissionError(RuntimeError):
     """A serial transmission failed after the port was opened."""
 
 
+class SerialTransmissionCancelled(RuntimeError):
+    """A serial transmission was cancelled by the operator."""
+
+
 def require_pyserial():
     try:
         import serial
@@ -132,10 +136,13 @@ def wait_until_resumed(
     port: str = "serial port",
     sleeper=sleep,
     clock=monotonic,
+    control=None,
 ) -> bool:
     paused = read_flow_control(connection, paused)
     pause_started = clock() if paused else None
     while paused:
+        if control:
+            control()
         if timeout_s is not None and clock() - pause_started >= timeout_s:
             raise SerialTransmissionError(
                 f"XOFF pause on {port} exceeded write timeout of {timeout_s:g} seconds"
@@ -145,13 +152,23 @@ def wait_until_resumed(
     return paused
 
 
-def send_bytes(data, settings, profile, progress=None, connection_factory=None, sleeper=sleep):
+def send_bytes(
+    data,
+    settings,
+    profile,
+    progress=None,
+    connection_factory=None,
+    sleeper=sleep,
+    control=None,
+):
     connection = (connection_factory or open_serial)(settings)
     sent = 0
     paused = False
     try:
         prepare_transmission(connection, settings)
         while sent < len(data):
+            if control:
+                control()
             if settings.xonxoff:
                 paused = wait_until_resumed(
                     connection,
@@ -159,6 +176,7 @@ def send_bytes(data, settings, profile, progress=None, connection_factory=None, 
                     settings.write_timeout_s,
                     settings.port,
                     sleeper,
+                    control=control,
                 )
             block = data[sent : sent + profile.chunk_size]
             try:

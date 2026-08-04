@@ -186,7 +186,7 @@ def test_prepare_rejects_unknown_file_type():
 def test_start_sends_prepared_data_with_safe_serial_defaults():
     calls = []
 
-    def sender(data, settings, profile, progress):
+    def sender(data, settings, profile, progress, control=None):
         calls.append((data, settings, profile))
         progress(len(data), len(data))
 
@@ -214,7 +214,7 @@ def test_start_rejects_unknown_or_stale_preview():
 def test_shutdown_waits_for_active_transmission():
     release = threading.Event()
 
-    def sender(data, settings, profile, progress):
+    def sender(data, settings, profile, progress, control=None):
         release.wait(2)
         progress(len(data), len(data))
 
@@ -230,6 +230,56 @@ def test_shutdown_waits_for_active_transmission():
     release.set()
     assert done.wait(2)
     assert app.state.snapshot()["status"] == "complete"
+
+
+def test_plot_can_be_paused_and_resumed():
+    sender_started = threading.Event()
+    enter_control = threading.Event()
+
+    def sender(data, settings, profile, progress, control=None):
+        sender_started.set()
+        enter_control.wait(2)
+        control()
+        progress(len(data), len(data))
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+    assert sender_started.wait(2)
+
+    app.control("pause")
+    assert app.state.snapshot()["status"] == "paused"
+    enter_control.set()
+    time.sleep(0.05)
+    assert app.state.transmission_done.is_set() is False
+
+    app.control("resume")
+    assert app.state.transmission_done.wait(2)
+    assert app.state.snapshot()["status"] == "complete"
+
+
+def test_plot_can_be_cancelled_while_paused():
+    sender_started = threading.Event()
+    enter_control = threading.Event()
+
+    def sender(data, settings, profile, progress, control=None):
+        sender_started.set()
+        enter_control.wait(2)
+        control()
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+    assert sender_started.wait(2)
+
+    app.control("pause")
+    app.control("cancel")
+    enter_control.set()
+
+    assert app.state.transmission_done.wait(2)
+    snapshot = app.state.snapshot()
+    assert snapshot["status"] == "cancelled"
+    assert "RESET" in snapshot["message"]
 
 
 def test_conversion_options_preserve_a3_and_calibration_defaults():

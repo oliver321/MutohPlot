@@ -1,0 +1,13 @@
+[Unit]
+Description=MutohPlot Weboberflaeche
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/MutohPlot-web
+ExecStart=%h/MutohPlot-web/.venv/bin/mutohplot web --host 0.0.0.0 --port 8040
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

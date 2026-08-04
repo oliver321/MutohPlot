@@ -1,4 +1,4 @@
-# MutohPlot v0.0.16
+# MutohPlot v0.0.17
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.
@@ -133,3 +133,126 @@ bleiben auch mehrminütige Pausen zum Auffüllen eines Stifts sicher.
 Der vollständige Ablauf für den A3-Hardwaretest steht unter [docs/a3-serial-hardware-test.md](docs/a3-serial-hardware-test.md).
 
 A3 bleibt Standard. Die bestätigte Hard-Clip-Korrektur aus v0.0.8 ist unverändert.
+
+## Lokale Weboberfläche
+
+Die Weboberfläche prüft eine HP-GL- oder SVG-Datei, zeigt ihre Vorschau und sendet
+anschließend exakt den geprüften Datenstand. Standardmäßig ist sie nur auf dem
+Raspberry Pi selbst erreichbar:
+
+```bash
+mutohplot web
+```
+
+Aufruf im Browser: `http://127.0.0.1:8040`. Für Geräte im vertrauenswürdigen
+lokalen Netz kann der Dienst ausdrücklich freigegeben werden:
+
+```bash
+mutohplot web --host 0.0.0.0 --port 8040
+```
+
+Dann im Browser `http://RASPBERRY-PI-IP:8040` öffnen. A3, 19200 Baud, 8N1 und
+XON/XOFF bleiben fest voreingestellt. Vor dem Start fragt die Oberfläche noch
+einmal nach der mechanischen Bereitschaft. Es kann nur ein Plotauftrag zur Zeit
+übertragen werden.
+
+SVG-Dateien werden proportional in den sicheren Bereich des gewählten Formats eingepasst. Die
+Oberfläche zeigt die automatisch ermittelte Zuordnung der SVG-Strichfarben zu
+den Stiften 1 bis 8. Diese Zuordnung kann in der Weboberfläche für jede Farbe
+geändert werden; die Vorschau und die freigegebenen Plotdaten werden danach neu
+erzeugt. Inkscape-Ebenen mit Namen wie `Pen 4` oder `Stift 4`
+verwenden ausdrücklich den genannten Stift. Unterstützt werden die in
+[`docs/svg-support.md`](docs/svg-support.md) aufgeführten Linien-, Pfad- und
+Formelemente; reine Textobjekte müssen vor dem Upload in Pfade umgewandelt
+werden.
+
+In der Oberfläche sind A3, A2, A1 und A0 auswählbar; A3 bleibt die
+Voreinstellung. Ein Formatwechsel erzeugt die Vorschau und die freigegebenen
+Plotdaten neu. Hoch- und Querformat sind wählbar. Die maximale Dateigröße
+beträgt 20 MB.
+
+Die Drehung ist für HP-GL und SVG einheitlich auswählbar: `Automatisch`, `0°`,
+`90°`, `180°` oder `270°`. Automatisch vergleicht 0° und 90° und verwendet die
+Orientierung mit dem größeren Fit-Maßstab. Eine manuelle Auswahl wird exakt auf
+Vorschau und Plotdaten angewendet. Blattformat und Drehung sind unabhängig:
+Querformat dreht das Blatt, die Drehungsoption dreht die Zeichnung darauf.
+
+Nach der SVG-Prüfung nennt die Oberfläche nicht gezeichnete Elementtypen. Das
+betrifft beispielsweise `text`, `image` und `use`. Enthält eine Datei daneben
+unterstützte Liniengeometrie, bleibt der Plot möglich, der Hinweis muss aber vor
+dem Start geprüft werden. Eine reine Datei ohne unterstützte Geometrie wird
+abgewiesen.
+
+### Stiftprofile im Webinterface
+
+Unter **Stifte konfigurieren** verwaltet die Weboberfläche mehrere vollständige
+Bestückungsprofile. Das mitgelieferte Profil `Standard` ist anfangs als
+Standardprofil gesetzt. Für jeden der acht Plätze werden Bezeichnung, Art,
+Breite und tatsächliche Farbe gespeichert. Neue Profile beginnen als Kopie des
+gerade gewählten Profils.
+
+Ein Profil kann ausgewählt, gespeichert, umbenannt, als Standard gesetzt oder
+gelöscht werden. Das aktuell gesetzte Standardprofil kann erst gelöscht werden,
+nachdem ein anderes Profil als Standard gewählt wurde. Die zentrale Datei auf
+dem Raspberry Pi ist:
+
+```text
+/home/oliver/.config/mutohplot/web-pens.json
+```
+
+Die gemeinsame Zuordnung zeigt **Quelldarstellung → tatsächlicher Stift**. Bei
+SVG ist die Quelle eine Strichfarbe, bei HP-GL eine mit `SP` gewählte
+Stiftnummer. Beide können auf einen beliebigen Platz 1 bis 8 des gewählten
+Profils gelegt werden. Die Vorschau verwendet die dort konfigurierte
+tatsächliche Stiftfarbe. Bei HP-GL beeinflusst die Zielstiftbreite außerdem die
+bestehende Berechnung von `RA`-Füllabständen. Ein Profilwechsel oder eine
+Änderung der Zuordnung erzeugt die Vorschau und die freigegebenen Plotdaten neu.
+
+Die frühere Farbangabe `graphite` wird beim Laden alter Profile automatisch in
+das browserkompatible Graphitgrau `#41424c` überführt. Dadurch bleiben
+Bleistiftlinien in der Webvorschau sichtbar.
+
+Für einen automatischen Start auf dem Raspberry Pi liegt unter
+`deploy/mutohplot-web.service` eine systemd-User-Unit bereit.
+
+### Installation auf dem MutohPlot-Raspberry-Pi
+
+Der derzeit verwendete Raspberry Pi ist unter `10.200.0.114` erreichbar. Die
+Weboberfläche wird getrennt vom produktiven Checkout unter
+`/home/oliver/MutohPlot-web` installiert. Nach der Installation ist sie im
+lokalen Netz unter <http://10.200.0.114:8040> erreichbar.
+
+```bash
+cd /home/oliver/MutohPlot-web
+python3 -m venv .venv
+.venv/bin/python -m pip install -e . pytest
+.venv/bin/python -m pytest -q
+mkdir -p "$HOME/.config/systemd/user"
+cp deploy/mutohplot-web.service "$HOME/.config/systemd/user/mutohplot-web.service"
+systemctl --user daemon-reload
+systemctl --user enable --now mutohplot-web.service
+```
+
+Status prüfen, Dienst neu starten und das laufende Protokoll anzeigen:
+
+```bash
+systemctl --user status mutohplot-web.service
+systemctl --user restart mutohplot-web.service
+journalctl --user -u mutohplot-web.service -f
+```
+
+Die serielle Schnittstelle des XP-500 kann so kontrolliert werden:
+
+```bash
+ls -l /dev/ttyUSB0
+/home/oliver/MutohPlot-web/.venv/bin/mutohplot serial-status /dev/ttyUSB0
+```
+
+Die User-Unit startet automatisch bei der Anmeldung von `oliver`. Soll die
+Weboberfläche bereits nach dem Booten und vor einer Anmeldung starten, muss
+einmalig mit administrativen Rechten Linger aktiviert werden:
+
+```bash
+sudo loginctl enable-linger oliver
+loginctl show-user oliver -p Linger
+```

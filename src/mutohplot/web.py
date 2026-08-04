@@ -547,7 +547,7 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label>Papierformat</label><select id="paper"><option value="a3">A3 · Standard</option><option value="a2">A2</option><option value="a1">A1</option><option value="a0">A0</option></select>
 <label class="checks"><input id="landscape" type="checkbox"> Querformat</label>
 <label>Sicherheitsrand</label><select id="margin"><option value="5">5 mm</option><option value="10">10 mm</option><option value="0">Kein zusätzlicher Rand</option></select>
-<label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen (--fit)</label>
+<label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
 <label>Puffer</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>

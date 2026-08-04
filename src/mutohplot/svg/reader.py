@@ -9,6 +9,7 @@ from .matrix import Matrix
 from .path import parse_path
 
 UNIT = {"mm": 1, "cm": 10, "in": 25.4, "pt": 25.4 / 72, "pc": 25.4 / 6, "px": 25.4 / 96, "": 1}
+SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 
 
 def length_mm(v):
@@ -125,6 +126,10 @@ class SVGReader:
         return self.colors[c]
 
     def walk(self, e, parent, inherit, doc, layer=None):
+        if e.tag.startswith("{"):
+            namespace = e.tag[1:].split("}", 1)[0]
+            if namespace != SVG_NAMESPACE:
+                return
         tag = e.tag.split("}")[-1]
         if tag in {"defs", "clipPath", "mask", "metadata", "symbol"}:
             return

@@ -538,7 +538,7 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 .facts{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.9rem;margin-top:1rem}.facts span:nth-child(odd){color:#64736b}
 .profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.profile-actions button{margin-top:.4rem}.pen-row{border-top:1px solid #dde3df;padding:.5rem 0}.pen-row strong{display:block}.pen-row .checks{margin:.3rem 0}.pen-row input,.pen-row select{padding:.4rem}
 @media(max-width:760px){main{grid-template-columns:1fr}.preview{min-height:300px}}
-</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.5</small></h1></header><main>
+</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.6</small></h1></header><main>
 <section class="card"><h2>Plot vorbereiten</h2><label>HP-GL- oder SVG-Datei</label><input id="file" type="file" accept=".hpgl,.plt,.svg,image/svg+xml"><small>Die Vorschau wird direkt nach der Auswahl erzeugt. Maximal 20 MB.</small><div id="selection" class="status">Noch keine Datei ausgewählt</div>
 <label>Stiftprofil</label><select id="profile"></select>
 <details><summary>Stifte konfigurieren</summary><div class="profile-actions"><button id="newprofile">Neues Profil</button><button id="saveprofile">Speichern</button><button id="defaultprofile">Als Standard</button><button id="deleteprofile">Löschen</button></div><div id="peneditor"></div></details>
@@ -548,8 +548,8 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
-<label>Puffer</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <button id="check">Datei prüfen und anzeigen</button><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
+<label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
 <button id="plot" disabled>Geprüften Plot starten</button><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
 <section class="card preview" id="preview"><p>Hier erscheint die A3-Vorschau.</p></section></main><script>

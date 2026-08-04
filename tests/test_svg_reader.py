@@ -57,6 +57,21 @@ def test_unsupported_visible_elements_are_reported():
     assert document.metadata["unsupported_svg_elements"] == ["text", "image"]
 
 
+def test_editor_metadata_from_foreign_namespaces_is_ignored():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg"
+      xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+      xmlns:WCB="http://www.evilmadscientist.com/" width="100" height="100">
+      <sodipodi:namedview pagecolor="#ffffff"/>
+      <WCB:WCBLayer layer="1"/>
+      <line x1="0" y1="0" x2="10" y2="10"/>
+    </svg>"""
+
+    document = SVGReader().read_text(svg)
+
+    assert len(document.polylines) == 1
+    assert document.metadata["unsupported_svg_elements"] == []
+
+
 def test_explicit_pen_map_is_recorded_in_document_metadata():
     document = SVGReader(pen_map={"red": 6}).read_text(SVG.replace("<line", '<line stroke="red"'))
 

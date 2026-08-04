@@ -1,11 +1,10 @@
-import time
 import threading
+import time
 
 import pytest
 
 from mutohplot.web import WebApplication, _conversion_args
 from mutohplot.web_profiles import PenProfileStore, standard_profile
-
 
 SIMPLE_HPGL = "IN;SP1;PA0,0;PD4000,2000;PU;"
 SIMPLE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm">
@@ -22,7 +21,7 @@ def test_prepare_returns_a3_preview_and_plot_token():
     assert result["name"] == "test.hpgl"
     assert result["polylines"] == 1
     assert result["bytes"] > 0
-    assert result["preview_url"] == f'/api/preview/{result["token"]}'
+    assert result["preview_url"] == f"/api/preview/{result['token']}"
     preview = app.state.prepared[result["token"]].preview_svg
     assert "<svg" in preview
     assert 'width="297.0mm"' in preview
@@ -63,9 +62,7 @@ def test_prepare_svg_with_default_path_optimization():
 def test_prepare_svg_auto_rotation_selects_larger_fit():
     app = WebApplication()
 
-    result = app.prepare(
-        "zeichnung.svg", SIMPLE_SVG, {"rotation": "auto", "optimize": False}
-    )
+    result = app.prepare("zeichnung.svg", SIMPLE_SVG, {"rotation": "auto", "optimize": False})
 
     assert result["rotation"] == 90
 
@@ -114,7 +111,9 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
 
 def test_prepare_svg_rejects_document_without_supported_geometry():
     app = WebApplication()
-    text_only = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text>Hi</text></svg>'
+    text_only = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><text>Hi</text></svg>'
+    )
 
     with pytest.raises(ValueError, match="keine unterstützte"):
         app.prepare("text.svg", text_only, {})
@@ -122,7 +121,7 @@ def test_prepare_svg_rejects_document_without_supported_geometry():
 
 def test_prepare_svg_warns_about_ignored_text_in_mixed_document():
     app = WebApplication()
-    mixed = SIMPLE_SVG.replace("</svg>", "<text x=\"10\" y=\"10\">Hi</text></svg>")
+    mixed = SIMPLE_SVG.replace("</svg>", '<text x="10" y="10">Hi</text></svg>')
 
     result = app.prepare("mixed.svg", mixed, {"optimize": False})
 
@@ -132,9 +131,7 @@ def test_prepare_svg_warns_about_ignored_text_in_mixed_document():
 def test_prepare_svg_applies_manual_color_to_pen_mapping():
     app = WebApplication()
 
-    result = app.prepare(
-        "zeichnung.svg", SIMPLE_SVG, {"optimize": False, "pen_map": {"red": 7}}
-    )
+    result = app.prepare("zeichnung.svg", SIMPLE_SVG, {"optimize": False, "pen_map": {"red": 7}})
 
     assert result["pens"] == {"red": 7}
     assert app.state.prepared[result["token"]].data.find(b"SP7;") >= 0
@@ -148,9 +145,7 @@ def test_prepare_svg_uses_selected_persistent_pen_profile(tmp_path):
     store.put(profile)
     app = WebApplication(profile_store=store)
 
-    result = app.prepare(
-        "zeichnung.svg", SIMPLE_SVG, {"profile": "Farbstifte", "optimize": False}
-    )
+    result = app.prepare("zeichnung.svg", SIMPLE_SVG, {"profile": "Farbstifte", "optimize": False})
 
     preview = app.state.prepared[result["token"]].preview_svg
     assert result["profile_name"] == "Farbstifte"
@@ -177,9 +172,7 @@ def test_prepare_hpgl_can_remap_source_pen_to_physical_slot(tmp_path):
 def test_prepare_hpgl_applies_manual_rotation():
     app = WebApplication()
 
-    result = app.prepare(
-        "zeichnung.hpgl", SIMPLE_HPGL, {"rotation": "270", "optimize": False}
-    )
+    result = app.prepare("zeichnung.hpgl", SIMPLE_HPGL, {"rotation": "270", "optimize": False})
 
     assert result["rotation"] == 270
 

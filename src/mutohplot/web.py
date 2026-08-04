@@ -8,18 +8,18 @@ import signal
 import tempfile
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable
 from urllib.parse import urlsplit
 
 from .cli import convert_hpgl, ra_fill_spacings
 from .devices.mutoh_xp500 import MutohXP500
 from .hard_clip import drawable_area, get_hard_clip
-from .hpgl.writer import HPGLWriter
 from .hpgl.parser import HPGLParser
+from .hpgl.writer import HPGLWriter
 from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
@@ -30,7 +30,7 @@ from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
 from .transform.fit import apply_fit, fit_document_to_area, rotate_document
 from .transform.hard_clip import hard_clip_center_correction
-from .web_profiles import PenProfileStore, TYPE_LABELS
+from .web_profiles import TYPE_LABELS, PenProfileStore
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 # JSON escaping adds overhead. The actual file-size limit is checked separately.
@@ -92,7 +92,7 @@ def _conversion_args(options: dict) -> argparse.Namespace:
         raise ValueError("Unbekanntes Papierformat")
     raw_pen_map = options.get("pen_map", {})
     if not isinstance(raw_pen_map, dict):
-        raise ValueError("Ungültige SVG-Stiftzuordnung")
+        raise TypeError("Ungültige SVG-Stiftzuordnung")
     try:
         pen_map = {str(color).lower(): int(pen) for color, pen in raw_pen_map.items()}
     except (TypeError, ValueError) as error:
@@ -101,7 +101,7 @@ def _conversion_args(options: dict) -> argparse.Namespace:
         raise ValueError("SVG-Stiftnummern müssen zwischen 1 und 8 liegen")
     raw_hpgl_map = options.get("hpgl_pen_map", {})
     if not isinstance(raw_hpgl_map, dict):
-        raise ValueError("Ungültige HP-GL-Stiftzuordnung")
+        raise TypeError("Ungültige HP-GL-Stiftzuordnung")
     try:
         hpgl_pen_map = {int(source): int(target) for source, target in raw_hpgl_map.items()}
     except (TypeError, ValueError) as error:
@@ -195,9 +195,9 @@ class WebApplication:
         return output, document, scale, rotation, mapping
 
     def _prepare_svg(self, source: str, args, preview_path: Path, profile: dict):
-        document = SVGReader(
-            curve_steps=24, pen_map=args.pen_map, layer_pens=True
-        ).read_text(source)
+        document = SVGReader(curve_steps=24, pen_map=args.pen_map, layer_pens=True).read_text(
+            source
+        )
         if not document.polylines:
             raise ValueError("Das SVG enthält keine unterstützte, sichtbare Liniengeometrie")
 
@@ -214,9 +214,7 @@ class WebApplication:
         if args.fit:
             rotation = args.rotate
             if args.auto_rotate:
-                normal_fit = fit_document_to_area(
-                    document, safe, paper.width_mm, paper.height_mm
-                )
+                normal_fit = fit_document_to_area(document, safe, paper.width_mm, paper.height_mm)
                 rotated_document = rotate_document(document, 90)
                 rotated_fit = fit_document_to_area(
                     rotated_document, safe, paper.width_mm, paper.height_mm
@@ -365,7 +363,7 @@ class WebApplication:
                     BUFFER_PROFILES[buffer_profile],
                     progress,
                 )
-            except Exception as error:  # surfaced to the browser as job state
+            except (OSError, RuntimeError, TimeoutError) as error:
                 with self.state.lock:
                     self.state.status = "error"
                     self.state.message = f"Übertragung fehlgeschlagen: {error}"
@@ -485,11 +483,11 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
                 self._json({"deleted": payload.get("name")})
             else:
                 self._json({"error": "Nicht gefunden"}, HTTPStatus.NOT_FOUND)
-        except (ValueError, RuntimeError) as error:
+        except (TypeError, ValueError, RuntimeError) as error:
             with self.app.state.lock:
                 self.app.state.message = str(error)
             self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:
+        except (OSError, UnicodeError) as error:
             self._json({"error": f"Verarbeitung fehlgeschlagen: {error}"}, 500)
 
     def log_message(self, format: str, *args) -> None:
@@ -526,7 +524,7 @@ def serve(host: str = "127.0.0.1", port: int = 8040) -> None:
         server.server_close()
 
 
-PAGE = r'''<!doctype html>
+PAGE = r"""<!doctype html>
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>MutohPlot</title><style>
 :root{font-family:system-ui,sans-serif;color:#17221d;background:#eef1ed}*{box-sizing:border-box}
@@ -575,4 +573,4 @@ $('defaultprofile').onclick=async()=>{try{await api('/api/profiles/default',{nam
 $('deleteprofile').onclick=async()=>{const name=$('profile').value;if(!confirm(`Profil ${name} wirklich löschen?`))return;try{await api('/api/profiles/delete',{name});await loadProfiles();$('status').textContent=`Profil ${name} gelöscht`}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('plot').onclick=async()=>{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;try{await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});$('plot').disabled=true;}catch(e){$('status').textContent=e.message}}
 loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});status();setInterval(status,1000);
-</script></body></html>'''
+</script></body></html>"""

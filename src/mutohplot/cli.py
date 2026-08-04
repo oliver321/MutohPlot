@@ -449,7 +449,9 @@ def convert_hpgl(args, input_path, preview_path=None):
 
     def mapped_spacings(scale=1.0):
         spacings = ra_fill_spacings(args, scale)
-        mapped = {source: spacings.get(target, spacings[source]) for source, target in pen_remap.items()}
+        mapped = {
+            source: spacings.get(target, spacings[source]) for source, target in pen_remap.items()
+        }
         return spacings | mapped
 
     def apply_pen_remap(parsed_document):

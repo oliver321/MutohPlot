@@ -40,18 +40,18 @@ def standard_profile() -> dict:
 
 def validate_profile(profile: dict) -> dict:
     if not isinstance(profile, dict):
-        raise ValueError("Ungültiges Stiftprofil")
+        raise TypeError("Ungültiges Stiftprofil")
     name = str(profile.get("name", "")).strip()
     if not name or len(name) > 60:
         raise ValueError("Der Profilname muss 1 bis 60 Zeichen lang sein")
     raw_pens = profile.get("pens")
     if not isinstance(raw_pens, dict):
-        raise ValueError("Das Profil muss die Stifte 1 bis 8 enthalten")
+        raise TypeError("Das Profil muss die Stifte 1 bis 8 enthalten")
     pens = {}
     for number in range(1, 9):
         raw = raw_pens.get(str(number))
         if not isinstance(raw, dict):
-            raise ValueError(f"Stift {number} fehlt")
+            raise TypeError(f"Stift {number} fehlt")
         label = str(raw.get("label", "")).strip()
         if not label or len(label) > 60:
             raise ValueError(f"Bezeichnung für Stift {number} ist ungültig")
@@ -93,19 +93,20 @@ class PenProfileStore:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             profiles = {
-                name: validate_profile(profile)
-                for name, profile in raw.get("profiles", {}).items()
+                name: validate_profile(profile) for name, profile in raw.get("profiles", {}).items()
             }
             default = str(raw.get("default", ""))
             if not profiles or default not in profiles:
                 raise ValueError("Standardprofil fehlt")
             return {"default": default, "profiles": profiles}
-        except (OSError, json.JSONDecodeError, ValueError) as error:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
             raise ValueError(f"Stiftprofile konnten nicht geladen werden: {error}") from error
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary = tempfile.mkstemp(prefix="web-pens-", suffix=".json", dir=self.path.parent)
+        handle, temporary = tempfile.mkstemp(
+            prefix="web-pens-", suffix=".json", dir=self.path.parent
+        )
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
                 json.dump(self._data, stream, ensure_ascii=False, indent=2)

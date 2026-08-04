@@ -153,6 +153,10 @@ def parser():
 
     sub.add_parser("ports")
 
+    web = sub.add_parser("web", help="start the local MutohPlot web interface")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8040)
+
     status = sub.add_parser("serial-status")
     status.add_argument("port")
     status.add_argument("--baud", type=int, default=19200)
@@ -441,11 +445,26 @@ def expand_inputs(pattern):
 
 def convert_hpgl(args, input_path, preview_path=None):
     source_text = Path(input_path).read_text(errors="replace")
-    initial_fill_spacings = None if args.fit else ra_fill_spacings(args)
+    pen_remap = getattr(args, "pen_remap", {})
+
+    def mapped_spacings(scale=1.0):
+        spacings = ra_fill_spacings(args, scale)
+        mapped = {
+            source: spacings.get(target, spacings[source]) for source, target in pen_remap.items()
+        }
+        return spacings | mapped
+
+    def apply_pen_remap(parsed_document):
+        for polyline in parsed_document.polylines:
+            polyline.pen = pen_remap.get(polyline.pen, polyline.pen)
+        return parsed_document
+
+    initial_fill_spacings = None if args.fit else mapped_spacings()
     document = HPGLParser(
         args.source_unit,
         initial_fill_spacings,
     ).parse_text(source_text)
+    document = apply_pen_remap(document)
     paper = get_paper(args.paper, args.landscape)
     profile = get_hard_clip(args.window)
     hard = drawable_area(paper, profile, 0)
@@ -502,8 +521,9 @@ def convert_hpgl(args, input_path, preview_path=None):
         if "RA" in document.metadata["hpgl_commands"]:
             document = HPGLParser(
                 args.source_unit,
-                ra_fill_spacings(args, fit.scale),
+                mapped_spacings(fit.scale),
             ).parse_text(source_text)
+            document = apply_pen_remap(document)
             if fit_rotation:
                 document = rotate_document(document, fit_rotation)
             fit = fit_document_to_area(
@@ -598,6 +618,11 @@ def main():
             print("No serial ports found")
         for item in items:
             print(f"{item['device']}: {item['description']} {item['hwid']}".strip())
+        return
+    if args.command == "web":
+        from .web import serve
+
+        serve(args.host, args.port)
         return
     if args.command == "serial-status":
         s = SerialSettings(

@@ -89,7 +89,12 @@ class SVGReader:
             base = Matrix.translate(-vb[0], -vb[1]).then(base)
         self.colors = {}
         doc = PlotDocument(
-            metadata={"page_width_mm": w, "page_height_mm": h, "color_to_pen": self.colors}
+            metadata={
+                "page_width_mm": w,
+                "page_height_mm": h,
+                "color_to_pen": self.colors,
+                "unsupported_svg_elements": [],
+            }
         )
         self.walk(root, base, {}, doc)
         return doc
@@ -113,6 +118,7 @@ class SVGReader:
             if m:
                 return int(m.group(1))
         if c in self.pen_map:
+            self.colors[c] = self.pen_map[c]
             return self.pen_map[c]
         if c not in self.colors:
             self.colors[c] = len(self.colors) % self.pen_count + 1
@@ -133,6 +139,8 @@ class SVGReader:
             if e.get(k) is not None:
                 s[k] = e.get(k)
         polys = []
+        supported_containers = {"svg", "g", "a", "switch"}
+        supported_geometry = {"line", "polyline", "polygon", "rect", "circle", "ellipse", "path"}
         if self.visible(s):
             if tag == "line":
                 polys = [
@@ -183,6 +191,8 @@ class SVGReader:
                 ]
             elif tag == "path":
                 polys = parse_path(e.get("d", ""), self.curve_steps)
+            elif tag not in supported_containers and tag not in supported_geometry:
+                doc.metadata["unsupported_svg_elements"].append(tag)
         if polys:
             pen = self.pen(s.get("stroke"), current_layer)
             color = s.get("stroke", "#000000")

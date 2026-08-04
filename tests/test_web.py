@@ -1,4 +1,5 @@
 import time
+import threading
 
 import pytest
 
@@ -78,6 +79,18 @@ def test_prepare_svg_applies_manual_rotation(rotation):
     )
 
     assert result["rotation"] == rotation
+
+
+def test_prepare_svg_without_fit_preserves_scale_and_warns_about_bounds():
+    app = WebApplication()
+
+    result = app.prepare(
+        "zeichnung.svg", SIMPLE_SVG, {"fit": False, "rotation": "0", "optimize": False}
+    )
+
+    assert result["scale"] is None
+    assert result["rotation"] == 0
+    assert "Zeichnung liegt außerhalb des sicheren Bereichs" in result["warnings"]
 
 
 @pytest.mark.parametrize(
@@ -205,6 +218,27 @@ def test_start_rejects_unknown_or_stale_preview():
         app.start("unknown", "/dev/ttyUSB0", "small")
 
 
+def test_shutdown_waits_for_active_transmission():
+    release = threading.Event()
+
+    def sender(data, settings, profile, progress):
+        release.wait(2)
+        progress(len(data), len(data))
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+
+    done = app.request_shutdown()
+    assert done.is_set() is False
+    assert app.state.snapshot()["shutdown_requested"] is True
+    assert "wartet" in app.state.snapshot()["message"]
+
+    release.set()
+    assert done.wait(2)
+    assert app.state.snapshot()["status"] == "complete"
+
+
 def test_conversion_options_preserve_a3_and_calibration_defaults():
     args = _conversion_args({})
     assert args.paper == "a3"
@@ -225,3 +259,11 @@ def test_conversion_options_validate_rotation_mode():
     assert _conversion_args({"rotation": "90"}).rotate == 90
     with pytest.raises(ValueError, match="Drehung"):
         _conversion_args({"rotation": "45"})
+
+
+def test_conversion_options_allow_no_fit_only_without_rotation():
+    args = _conversion_args({"fit": False, "rotation": "0"})
+    assert args.fit is False
+    assert args.auto_rotate is False
+    with pytest.raises(ValueError, match="Einpassen"):
+        _conversion_args({"fit": False, "rotation": "90"})

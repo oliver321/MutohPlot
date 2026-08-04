@@ -156,6 +156,12 @@ XON/XOFF bleiben fest voreingestellt. Vor dem Start fragt die Oberfläche noch
 einmal nach der mechanischen Bereitschaft. Es kann nur ein Plotauftrag zur Zeit
 übertragen werden.
 
+Wird während einer aktiven Übertragung ein Dienst-Neustart angefordert, nimmt
+die Oberfläche keine neuen Aufträge an und wartet auf den vollständigen
+Abschluss des laufenden Sendens. Das gilt auch während einer zeitlich
+unbegrenzten XOFF-Pause. Die systemd-Unit besitzt deshalb keine feste
+Abschussfrist.
+
 SVG-Dateien werden proportional in den sicheren Bereich des gewählten Formats eingepasst. Die
 Oberfläche zeigt die automatisch ermittelte Zuordnung der SVG-Strichfarben zu
 den Stiften 1 bis 8. Diese Zuordnung kann in der Weboberfläche für jede Farbe
@@ -176,6 +182,12 @@ Die Drehung ist für HP-GL und SVG einheitlich auswählbar: `Automatisch`, `0°`
 Orientierung mit dem größeren Fit-Maßstab. Eine manuelle Auswahl wird exakt auf
 Vorschau und Plotdaten angewendet. Blattformat und Drehung sind unabhängig:
 Querformat dreht das Blatt, die Drehungsoption dreht die Zeichnung darauf.
+
+**Auf sicheren Bereich einpassen (`--fit`)** ist standardmäßig aktiv. Wird es
+abgeschaltet, bleiben Maßstab und Position der Eingabe erhalten. Drehungen sind
+dann gesperrt, weil sie ohne anschließende Zentrierung die
+Koordinatenkonvention verändern würden. Die Vorschau warnt, wenn die
+Originalgeometrie außerhalb des sicheren Bereichs liegt.
 
 Nach der SVG-Prüfung nennt die Oberfläche nicht gezeichnete Elementtypen. Das
 betrifft beispielsweise `text`, `image` und `use`. Enthält eine Datei daneben

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import tempfile
 import threading
 import uuid
@@ -22,6 +23,7 @@ from .hpgl.parser import HPGLParser
 from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
+from .report import check_bounds
 from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_bytes
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
@@ -63,6 +65,9 @@ class PlotState:
         self.sent = 0
         self.total = 0
         self.message = "Bereit"
+        self.transmission_done = threading.Event()
+        self.transmission_done.set()
+        self.shutdown_requested = False
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -71,6 +76,7 @@ class PlotState:
                 "sent": self.sent,
                 "total": self.total,
                 "message": self.message,
+                "shutdown_requested": self.shutdown_requested,
             }
 
 
@@ -102,9 +108,10 @@ def _conversion_args(options: dict) -> argparse.Namespace:
         raise ValueError("Ungültige HP-GL-Stiftzuordnung") from error
     if any(not 1 <= source <= 8 or not 1 <= target <= 8 for source, target in hpgl_pen_map.items()):
         raise ValueError("HP-GL-Stiftnummern müssen zwischen 1 und 8 liegen")
+    fit = bool(options.get("fit", True))
     rotation_option = options.get("rotation")
     if rotation_option is None:
-        auto_rotate = bool(options.get("auto_rotate", True))
+        auto_rotate = bool(options.get("auto_rotate", True)) if fit else False
         rotation = 0
     elif str(rotation_option).lower() == "auto":
         auto_rotate = True
@@ -117,13 +124,15 @@ def _conversion_args(options: dict) -> argparse.Namespace:
         if rotation not in {0, 90, 180, 270}:
             raise ValueError("Drehung muss automatisch, 0°, 90°, 180° oder 270° sein")
         auto_rotate = False
+    if not fit and (auto_rotate or rotation):
+        raise ValueError("Drehung erfordert aktiviertes Einpassen (--fit)")
     return argparse.Namespace(
         source_unit=0.025,
         device_unit=0.01,
         paper=paper,
         landscape=bool(options.get("landscape", False)),
         window="norm",
-        fit=True,
+        fit=fit,
         rotate=rotation,
         auto_rotate=auto_rotate,
         margin=margin,
@@ -200,20 +209,26 @@ class WebApplication:
         profile = get_hard_clip("norm")
         hard = drawable_area(paper, profile, 0)
         safe = drawable_area(paper, profile, args.margin)
-        rotation = args.rotate
-        if args.auto_rotate:
-            normal_fit = fit_document_to_area(document, safe, paper.width_mm, paper.height_mm)
-            rotated_document = rotate_document(document, 90)
-            rotated_fit = fit_document_to_area(
-                rotated_document, safe, paper.width_mm, paper.height_mm
-            )
-            if rotated_fit.scale > normal_fit.scale:
-                document = rotated_document
-                rotation = 90
-        elif args.rotate:
-            document = rotate_document(document, args.rotate)
-        fit = fit_document_to_area(document, safe, paper.width_mm, paper.height_mm)
-        document = apply_fit(document, fit)
+        rotation = 0
+        fit_scale = None
+        if args.fit:
+            rotation = args.rotate
+            if args.auto_rotate:
+                normal_fit = fit_document_to_area(
+                    document, safe, paper.width_mm, paper.height_mm
+                )
+                rotated_document = rotate_document(document, 90)
+                rotated_fit = fit_document_to_area(
+                    rotated_document, safe, paper.width_mm, paper.height_mm
+                )
+                if rotated_fit.scale > normal_fit.scale:
+                    document = rotated_document
+                    rotation = 90
+            elif args.rotate:
+                document = rotate_document(document, args.rotate)
+            fit = fit_document_to_area(document, safe, paper.width_mm, paper.height_mm)
+            document = apply_fit(document, fit)
+            fit_scale = fit.scale
         document, _ = optimize_geometry(document, "normal")
         if args.optimize:
             document = optimize_nearest(document, allow_reverse=True)
@@ -239,7 +254,10 @@ class WebApplication:
         warnings = []
         if unsupported:
             warnings.append("Nicht gezeichnete SVG-Elemente: " + ", ".join(unsupported))
-        return output, document, fit.scale, rotation, color_to_pen, warnings
+        bounds_check = check_bounds(document, safe)
+        if not bounds_check.inside:
+            warnings.append("Zeichnung liegt außerhalb des sicheren Bereichs")
+        return output, document, fit_scale, rotation, color_to_pen, warnings
 
     def prepare(self, name: str, source: str, options: dict) -> dict:
         if not source.strip():
@@ -319,6 +337,8 @@ class WebApplication:
         if not port:
             raise ValueError("Bitte eine serielle Schnittstelle auswählen")
         with self.state.lock:
+            if self.state.shutdown_requested:
+                raise RuntimeError("Der Webdienst wartet auf einen sicheren Neustart")
             if self.state.status in {"sending", "paused"}:
                 raise RuntimeError("Es läuft bereits ein Plotauftrag")
             prepared = self.state.prepared.get(token)
@@ -328,6 +348,7 @@ class WebApplication:
             self.state.sent = 0
             self.state.total = len(prepared.data)
             self.state.message = f"Sende {prepared.name}"
+            self.state.transmission_done.clear()
 
         settings = SerialSettings(port=port, baudrate=19200, xonxoff=True)
 
@@ -352,8 +373,17 @@ class WebApplication:
                 with self.state.lock:
                     self.state.status = "complete"
                     self.state.message = "Plotauftrag vollständig übertragen"
+            finally:
+                self.state.transmission_done.set()
 
-        threading.Thread(target=transmit, name="mutohplot-send", daemon=True).start()
+        threading.Thread(target=transmit, name="mutohplot-send", daemon=False).start()
+
+    def request_shutdown(self) -> threading.Event:
+        with self.state.lock:
+            self.state.shutdown_requested = True
+            if not self.state.transmission_done.is_set():
+                self.state.message = "Neustart wartet auf das Ende der Übertragung"
+        return self.state.transmission_done
 
 
 class MutohPlotHandler(BaseHTTPRequestHandler):
@@ -469,6 +499,23 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
 def serve(host: str = "127.0.0.1", port: int = 8040) -> None:
     server = ThreadingHTTPServer((host, port), MutohPlotHandler)
     server.app = WebApplication()  # type: ignore[attr-defined]
+    shutdown_started = threading.Event()
+
+    def graceful_shutdown(signum, frame) -> None:
+        if shutdown_started.is_set():
+            return
+        shutdown_started.set()
+        done = server.app.request_shutdown()  # type: ignore[attr-defined]
+        print("Sicherer Neustart angefordert; laufende Übertragung wird beendet", flush=True)
+
+        def wait_and_stop() -> None:
+            done.wait()
+            server.shutdown()
+
+        threading.Thread(target=wait_and_stop, name="mutohplot-shutdown", daemon=True).start()
+
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, graceful_shutdown)
     print(f"MutohPlot Weboberfläche: http://{host}:{server.server_port}")
     print("Beenden mit Ctrl+C")
     try:
@@ -493,13 +540,14 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 .facts{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.9rem;margin-top:1rem}.facts span:nth-child(odd){color:#64736b}
 .profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.profile-actions button{margin-top:.4rem}.pen-row{border-top:1px solid #dde3df;padding:.5rem 0}.pen-row strong{display:block}.pen-row .checks{margin:.3rem 0}.pen-row input,.pen-row select{padding:.4rem}
 @media(max-width:760px){main{grid-template-columns:1fr}.preview{min-height:300px}}
-</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.4</small></h1></header><main>
+</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.5</small></h1></header><main>
 <section class="card"><h2>Plot vorbereiten</h2><label>HP-GL- oder SVG-Datei</label><input id="file" type="file" accept=".hpgl,.plt,.svg,image/svg+xml"><small>Die Vorschau wird direkt nach der Auswahl erzeugt. Maximal 20 MB.</small><div id="selection" class="status">Noch keine Datei ausgewählt</div>
 <label>Stiftprofil</label><select id="profile"></select>
 <details><summary>Stifte konfigurieren</summary><div class="profile-actions"><button id="newprofile">Neues Profil</button><button id="saveprofile">Speichern</button><button id="defaultprofile">Als Standard</button><button id="deleteprofile">Löschen</button></div><div id="peneditor"></div></details>
 <label>Papierformat</label><select id="paper"><option value="a3">A3 · Standard</option><option value="a2">A2</option><option value="a1">A1</option><option value="a0">A0</option></select>
 <label class="checks"><input id="landscape" type="checkbox"> Querformat</label>
 <label>Sicherheitsrand</label><select id="margin"><option value="5">5 mm</option><option value="10">10 mm</option><option value="0">Kein zusätzlicher Rand</option></select>
+<label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen (--fit)</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
 <label>Puffer</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
@@ -514,10 +562,11 @@ function renderProfile(){const profile=currentProfile(),box=$('peneditor');box.r
 async function loadProfiles(selected){profileData=await api('/api/profiles');const select=$('profile');select.replaceChildren();for(const name of Object.keys(profileData.profiles)){const option=document.createElement('option');option.value=name;option.textContent=name+(name===profileData.default?' · Standard':'');select.append(option)}select.value=selected&&profileData.profiles[selected]?selected:profileData.default;editingOriginal=select.value;renderProfile()}
 function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;$('check').click()};row.append(swatch,text,select);box.append(row)}}
 async function status(){try{const s=await api('/api/status');if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
-$('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;try{const isSvg=f.name.toLowerCase().endsWith('.svg');const j=await api('/api/preview',{name:f.name,source:await f.text(),options:{profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap}});token=j.token;$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=$('paper').value.toUpperCase()+($('landscape').checked?' quer':' hoch');const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;$('plot').disabled=false;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){token=null;$('plot').disabled=true;localMessage=e.message;$('status').textContent=localMessage}finally{$('check').disabled=false}}
+$('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;try{const isSvg=f.name.toLowerCase().endsWith('.svg');const j=await api('/api/preview',{name:f.name,source:await f.text(),options:{profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap}});token=j.token;$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=$('paper').value.toUpperCase()+($('landscape').checked?' quer':' hoch');const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${$('fit').checked?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;$('plot').disabled=false;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){token=null;$('plot').disabled=true;localMessage=e.message;$('status').textContent=localMessage}finally{$('check').disabled=false}}
 $('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';$('check').click()};
 $('paper').onchange=()=>{if($('file').files[0])$('check').click()};
 $('landscape').onchange=()=>{if($('file').files[0])$('check').click()};
+$('fit').onchange=()=>{if(!$('fit').checked){$('rotation').value='0';$('rotation').disabled=true}else{$('rotation').disabled=false;$('rotation').value='auto'}if($('file').files[0])$('check').click()};
 $('rotation').onchange=()=>{if($('file').files[0])$('check').click()};
 $('profile').onchange=()=>{editingOriginal=$('profile').value;renderProfile();if($('file').files[0])$('check').click()};
 $('newprofile').onclick=()=>{const name=prompt('Name des neuen Stiftprofils');if(!name)return;const copy=JSON.parse(JSON.stringify(currentProfile()));copy.name=name.trim();profileData.profiles[copy.name]=copy;const option=document.createElement('option');option.value=copy.name;option.textContent=copy.name;$('profile').append(option);$('profile').value=copy.name;editingOriginal=null;renderProfile()};

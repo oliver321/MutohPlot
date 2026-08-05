@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from mutohplot.web import WebApplication, _conversion_args
+from mutohplot.web import PAGE, WebApplication, _conversion_args
 from mutohplot.web_profiles import PenProfileStore, standard_profile
 
 SIMPLE_HPGL = "IN;SP1;PA0,0;PD4000,2000;PU;"
@@ -107,6 +107,16 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
     preview = app.state.prepared[result["token"]].preview_svg
     assert f'width="{width}mm"' in preview
     assert f'height="{height}mm"' in preview
+    assert result["paper"] == paper
+    assert result["paper_width_mm"] == width
+    assert result["paper_height_mm"] == height
+
+
+def test_web_queues_changed_options_during_active_preview():
+    assert "if(previewBusy){previewQueued=true" in PAGE
+    assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
+    assert "$('paper').onchange=requestPreview" in PAGE
+    assert "const format=j.paper.toUpperCase()" in PAGE
 
 
 def test_prepare_svg_rejects_document_without_supported_geometry():

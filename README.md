@@ -1,4 +1,4 @@
-# MutohPlot v0.0.18
+# MutohPlot v0.0.19
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.
@@ -194,6 +194,13 @@ betrifft beispielsweise `text`, `image` und `use`. Enthält eine Datei daneben
 unterstützte Liniengeometrie, bleibt der Plot möglich, der Hinweis muss aber vor
 dem Start geprüft werden. Eine reine Datei ohne unterstützte Geometrie wird
 abgewiesen.
+
+Während einer Übertragung wird **Plot starten** zu **Stop**. Stop hält die
+Übertragung kontrolliert an; **Go** setzt sie fort. **Abbruch** beendet die
+Übertragung und schließt die serielle Schnittstelle. Bereits im Empfangspuffer
+des Plotters vorhandene Befehle können noch ausgeführt werden. Für einen
+vollständigen Abbruch deshalb zuerst am XP-500 auf `LOCAL` schalten und danach
+den Empfangspuffer mit `RESET` löschen.
 
 ### Stiftprofile im Webinterface
 

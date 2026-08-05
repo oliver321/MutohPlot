@@ -24,7 +24,13 @@ from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
 from .report import check_bounds
-from .serial_io import BUFFER_PROFILES, SerialSettings, list_serial_ports, send_bytes
+from .serial_io import (
+    BUFFER_PROFILES,
+    SerialSettings,
+    SerialTransmissionCancelled,
+    list_serial_ports,
+    send_bytes,
+)
 from .svg.preview import write_preview
 from .svg.reader import SVGReader
 from .transform.coordinate import CoordinateTransform
@@ -67,6 +73,9 @@ class PlotState:
         self.message = "Bereit"
         self.transmission_done = threading.Event()
         self.transmission_done.set()
+        self.transmission_resumed = threading.Event()
+        self.transmission_resumed.set()
+        self.transmission_cancelled = threading.Event()
         self.shutdown_requested = False
 
     def snapshot(self) -> dict:
@@ -310,6 +319,7 @@ class WebApplication:
         with self.state.lock:
             self.state.prepared = {token: prepared}
             self.state.message = f"{prepared.name} geprüft und bereit"
+        paper = get_paper(args.paper, args.landscape)
         return {
             "token": token,
             "name": prepared.name,
@@ -322,6 +332,10 @@ class WebApplication:
             "scale": prepared.scale,
             "bytes": len(prepared.data),
             "source_type": prepared.source_type,
+            "paper": args.paper,
+            "landscape": args.landscape,
+            "paper_width_mm": paper.width_mm,
+            "paper_height_mm": paper.height_mm,
             "pens": prepared.pens,
             "warnings": prepared.warnings,
             "profile_name": prepared.profile_name,
@@ -337,7 +351,7 @@ class WebApplication:
         with self.state.lock:
             if self.state.shutdown_requested:
                 raise RuntimeError("Der Webdienst wartet auf einen sicheren Neustart")
-            if self.state.status in {"sending", "paused"}:
+            if self.state.status in {"sending", "paused", "cancelling"}:
                 raise RuntimeError("Es läuft bereits ein Plotauftrag")
             prepared = self.state.prepared.get(token)
             if prepared is None:
@@ -347,6 +361,8 @@ class WebApplication:
             self.state.total = len(prepared.data)
             self.state.message = f"Sende {prepared.name}"
             self.state.transmission_done.clear()
+            self.state.transmission_resumed.set()
+            self.state.transmission_cancelled.clear()
 
         settings = SerialSettings(port=port, baudrate=19200, xonxoff=True)
 
@@ -355,6 +371,13 @@ class WebApplication:
                 self.state.sent = sent
                 self.state.total = total
 
+        def control() -> None:
+            if self.state.transmission_cancelled.is_set():
+                raise SerialTransmissionCancelled("Plotauftrag abgebrochen")
+            while not self.state.transmission_resumed.wait(0.05):
+                if self.state.transmission_cancelled.is_set():
+                    raise SerialTransmissionCancelled("Plotauftrag abgebrochen")
+
         def transmit() -> None:
             try:
                 self.sender(
@@ -362,7 +385,14 @@ class WebApplication:
                     settings,
                     BUFFER_PROFILES[buffer_profile],
                     progress,
+                    control=control,
                 )
+            except SerialTransmissionCancelled:
+                with self.state.lock:
+                    self.state.status = "cancelled"
+                    self.state.message = (
+                        "Plotauftrag abgebrochen · Empfangspuffer am Plotter mit RESET löschen"
+                    )
             except (OSError, RuntimeError, TimeoutError) as error:
                 with self.state.lock:
                     self.state.status = "error"
@@ -375,6 +405,30 @@ class WebApplication:
                 self.state.transmission_done.set()
 
         threading.Thread(target=transmit, name="mutohplot-send", daemon=False).start()
+
+    def control(self, action: str) -> None:
+        with self.state.lock:
+            if action == "pause":
+                if self.state.status != "sending":
+                    raise RuntimeError("Der Plotauftrag kann jetzt nicht angehalten werden")
+                self.state.transmission_resumed.clear()
+                self.state.status = "paused"
+                self.state.message = "Übertragung angehalten · Stop"
+            elif action == "resume":
+                if self.state.status != "paused":
+                    raise RuntimeError("Der Plotauftrag ist nicht angehalten")
+                self.state.transmission_resumed.set()
+                self.state.status = "sending"
+                self.state.message = "Übertragung fortgesetzt · Go"
+            elif action == "cancel":
+                if self.state.status not in {"sending", "paused"}:
+                    raise RuntimeError("Es läuft kein Plotauftrag")
+                self.state.status = "cancelling"
+                self.state.message = "Plotauftrag wird abgebrochen"
+                self.state.transmission_cancelled.set()
+                self.state.transmission_resumed.set()
+            else:
+                raise ValueError("Unbekannte Plotsteuerung")
 
     def request_shutdown(self) -> threading.Event:
         with self.state.lock:
@@ -470,6 +524,9 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
                     str(payload.get("buffer_profile", "small")),
                 )
                 self._json({"status": "sending"}, HTTPStatus.ACCEPTED)
+            elif path == "/api/plot/control":
+                self.app.control(str(payload.get("action", "")))
+                self._json({"status": self.app.state.snapshot()["status"]}, HTTPStatus.ACCEPTED)
             elif path == "/api/profiles/save":
                 profile = self.app.profiles.put(
                     payload.get("profile"), payload.get("previous_name")
@@ -533,12 +590,14 @@ main{max-width:1100px;margin:2rem auto;padding:0 1rem;display:grid;grid-template
 .card{background:white;border-radius:12px;padding:1rem;box-shadow:0 2px 10px #0001}label{display:block;margin:.8rem 0 .3rem}
 input,select,button{width:100%;padding:.7rem;border:1px solid #aab6af;border-radius:7px;background:white}
 button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;cursor:pointer}button:disabled{opacity:.45}
-.preview{min-height:480px;display:grid;place-items:center;overflow:auto}.preview img{display:block;max-width:100%;max-height:70vh}
+.preview-card{align-self:start;overflow:hidden}.preview{min-height:420px;display:grid;place-items:center;overflow:auto}.preview img{display:block;max-width:100%;max-height:70vh}
+.plot-info{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-bottom:1rem}.plot-info div{background:#e7eee9;border-radius:8px;padding:.65rem}.plot-info strong,.plot-info span{display:block}.plot-info strong{color:#64736b;font-size:.75rem;text-transform:uppercase;letter-spacing:.03em}.plot-info span{margin-top:.25rem;font-weight:650;font-size:.9rem}
 .checks{display:flex;gap:.5rem;align-items:center}.checks input{width:auto}.status{padding:.7rem;border-radius:7px;background:#e7eee9;margin-top:1rem}
 .facts{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.9rem;margin-top:1rem}.facts span:nth-child(odd){color:#64736b}
 .profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.profile-actions button{margin-top:.4rem}.pen-row{border-top:1px solid #dde3df;padding:.5rem 0}.pen-row strong{display:block}.pen-row .checks{margin:.3rem 0}.pen-row input,.pen-row select{padding:.4rem}
-@media(max-width:760px){main{grid-template-columns:1fr}.preview{min-height:300px}}
-</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.6</small></h1></header><main>
+.plot-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}.plot-actions button{margin-top:1rem}.danger{background:#a52a2a}
+@media(max-width:900px){.plot-info{grid-template-columns:1fr 1fr}}@media(max-width:760px){main{grid-template-columns:1fr}.preview{min-height:300px}}
+</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.7</small></h1></header><main>
 <section class="card"><h2>Plot vorbereiten</h2><label>HP-GL- oder SVG-Datei</label><input id="file" type="file" accept=".hpgl,.plt,.svg,image/svg+xml"><small>Die Vorschau wird direkt nach der Auswahl erzeugt. Maximal 20 MB.</small><div id="selection" class="status">Noch keine Datei ausgewählt</div>
 <label>Stiftprofil</label><select id="profile"></select>
 <details><summary>Stifte konfigurieren</summary><div class="profile-actions"><button id="newprofile">Neues Profil</button><button id="saveprofile">Speichern</button><button id="defaultprofile">Als Standard</button><button id="deleteprofile">Löschen</button></div><div id="peneditor"></div></details>
@@ -551,26 +610,30 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <button id="check">Datei prüfen und anzeigen</button><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
 <label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
-<button id="plot" disabled>Geprüften Plot starten</button><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
-<section class="card preview" id="preview"><p>Hier erscheint die A3-Vorschau.</p></section></main><script>
-let token=null,localMessage='',penMap={},mappingType='',mappingProfilePens={},profileData=null,editingOriginal=null; const $=id=>document.getElementById(id);
+<div class="plot-actions"><button id="plot" disabled>Plot starten</button><button id="abort" class="danger" hidden>Abbruch</button></div><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
+<section class="card preview-card"><div class="plot-info" id="plotinfo"><div><strong>Blatt</strong><span>–</span></div><div><strong>Plot</strong><span>–</span></div><div><strong>Ränder</strong><span>–</span></div><div><strong>Skalierung</strong><span>–</span></div></div><div class="preview" id="preview"><p>Hier erscheint die Vorschau.</p></div></section></main><script>
+let token=null,localMessage='',penMap={},mappingType='',mappingProfilePens={},profileData=null,editingOriginal=null,plotStatus='idle',plotStarted=false,previewBusy=false,previewQueued=false; const $=id=>document.getElementById(id);
 async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):null});const j=await r.json();if(!r.ok)throw Error(j.error||'Fehler');return j}
 function currentProfile(){return profileData?.profiles[$('profile').value]}
 function renderProfile(){const profile=currentProfile(),box=$('peneditor');box.replaceChildren();if(!profile)return;for(let n=1;n<=8;n++){const pen=profile.pens[n],row=document.createElement('div');row.className='pen-row';const title=document.createElement('strong');title.textContent=`Stift ${n}`;const label=document.createElement('input');label.value=pen.label;label.onchange=()=>pen.label=label.value;const line=document.createElement('div');line.className='checks';const type=document.createElement('select');for(const [value,text] of Object.entries(profileData.pen_types)){const option=document.createElement('option');option.value=value;option.textContent=text;option.selected=value===pen.type;type.append(option)}type.onchange=()=>pen.type=type.value;const width=document.createElement('select');for(const value of profileData.pen_widths){const option=document.createElement('option');option.value=value;option.textContent=`${String(value).replace('.',',')} mm`;option.selected=value===pen.width_mm;width.append(option)}width.onchange=()=>pen.width_mm=+width.value;const color=document.createElement('input');color.type='color';color.value=/^#[0-9a-f]{6}$/i.test(pen.color)?pen.color:'#000000';color.onchange=()=>pen.color=color.value;line.append(type,width,color);row.append(title,label,line);box.append(row)}}
 async function loadProfiles(selected){profileData=await api('/api/profiles');const select=$('profile');select.replaceChildren();for(const name of Object.keys(profileData.profiles)){const option=document.createElement('option');option.value=name;option.textContent=name+(name===profileData.default?' · Standard':'');select.append(option)}select.value=selected&&profileData.profiles[selected]?selected:profileData.default;editingOriginal=select.value;renderProfile()}
-function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;$('check').click()};row.append(swatch,text,select);box.append(row)}}
-async function status(){try{const s=await api('/api/status');if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
-$('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;try{const isSvg=f.name.toLowerCase().endsWith('.svg');const j=await api('/api/preview',{name:f.name,source:await f.text(),options:{profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap}});token=j.token;$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=$('paper').value.toUpperCase()+($('landscape').checked?' quer':' hoch');const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${$('fit').checked?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;$('plot').disabled=false;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){token=null;$('plot').disabled=true;localMessage=e.message;$('status').textContent=localMessage}finally{$('check').disabled=false}}
-$('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';$('check').click()};
-$('paper').onchange=()=>{if($('file').files[0])$('check').click()};
-$('landscape').onchange=()=>{if($('file').files[0])$('check').click()};
-$('fit').onchange=()=>{if(!$('fit').checked){$('rotation').value='0';$('rotation').disabled=true}else{$('rotation').disabled=false;$('rotation').value='auto'}if($('file').files[0])$('check').click()};
-$('rotation').onchange=()=>{if($('file').files[0])$('check').click()};
-$('profile').onchange=()=>{editingOriginal=$('profile').value;renderProfile();if($('file').files[0])$('check').click()};
+function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;requestPreview()};row.append(swatch,text,select);box.append(row)}}
+function renderPlotControls(){const active=['sending','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':plotStatus==='sending'?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
+function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`;$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
+async function status(){try{const s=await api('/api/status');plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
+function requestPreview(){if(!$('file').files[0])return;token=null;plotStarted=false;renderPlotControls();if(previewBusy){previewQueued=true;localMessage='Einstellung geändert · Vorschau wird anschließend neu berechnet';$('status').textContent=localMessage;return}$('check').click()}
+$('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}previewBusy=true;$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;const isSvg=f.name.toLowerCase().endsWith('.svg'),options={profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap};try{const j=await api('/api/preview',{name:f.name,source:await f.text(),options});if(previewQueued)return;token=j.token;plotStarted=false;renderPlotControls();renderPlotInfo(j);$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=j.paper.toUpperCase()+(j.landscape?' quer':' hoch')+` · ${j.paper_width_mm} × ${j.paper_height_mm} mm`;const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${options.fit?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){if(!previewQueued){token=null;renderPlotControls();localMessage=e.message;$('status').textContent=localMessage}}finally{previewBusy=false;$('check').disabled=false;if(previewQueued){previewQueued=false;requestPreview()}}}
+$('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';requestPreview()};
+$('paper').onchange=requestPreview;
+$('landscape').onchange=requestPreview;
+$('fit').onchange=()=>{if(!$('fit').checked){$('rotation').value='0';$('rotation').disabled=true}else{$('rotation').disabled=false;$('rotation').value='auto'}requestPreview()};
+$('rotation').onchange=requestPreview;
+$('profile').onchange=()=>{editingOriginal=$('profile').value;renderProfile();requestPreview()};
 $('newprofile').onclick=()=>{const name=prompt('Name des neuen Stiftprofils');if(!name)return;const copy=JSON.parse(JSON.stringify(currentProfile()));copy.name=name.trim();profileData.profiles[copy.name]=copy;const option=document.createElement('option');option.value=copy.name;option.textContent=copy.name;$('profile').append(option);$('profile').value=copy.name;editingOriginal=null;renderProfile()};
-$('saveprofile').onclick=async()=>{try{const profile=currentProfile();await api('/api/profiles/save',{profile,previous_name:editingOriginal});await loadProfiles(profile.name);localMessage='';$('status').textContent=`Profil ${profile.name} gespeichert`;if($('file').files[0])$('check').click()}catch(e){localMessage=e.message;$('status').textContent=e.message}};
+$('saveprofile').onclick=async()=>{try{const profile=currentProfile();await api('/api/profiles/save',{profile,previous_name:editingOriginal});await loadProfiles(profile.name);localMessage='';$('status').textContent=`Profil ${profile.name} gespeichert`;requestPreview()}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('defaultprofile').onclick=async()=>{try{await api('/api/profiles/default',{name:$('profile').value});await loadProfiles($('profile').value);$('status').textContent='Standardprofil geändert'}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('deleteprofile').onclick=async()=>{const name=$('profile').value;if(!confirm(`Profil ${name} wirklich löschen?`))return;try{await api('/api/profiles/delete',{name});await loadProfiles();$('status').textContent=`Profil ${name} gelöscht`}catch(e){localMessage=e.message;$('status').textContent=e.message}};
-$('plot').onclick=async()=>{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;try{await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});$('plot').disabled=true;}catch(e){$('status').textContent=e.message}}
+$('plot').onclick=async()=>{try{if(plotStatus==='sending'){await api('/api/plot/control',{action:'pause'});plotStatus='paused'}else if(plotStatus==='paused'){await api('/api/plot/control',{action:'resume'});plotStatus='sending'}else{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});plotStarted=true;plotStatus='sending'}renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
+$('abort').onclick=async()=>{if(!confirm('Plot wirklich abbrechen? Bereits empfangene Daten müssen am Plotter mit LOCAL und RESET gelöscht werden.'))return;try{await api('/api/plot/control',{action:'cancel'});plotStatus='cancelling';renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
 loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});status();setInterval(status,1000);
 </script></body></html>"""

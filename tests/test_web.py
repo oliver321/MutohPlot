@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from mutohplot.web import WebApplication, _conversion_args
+from mutohplot.web import PAGE, WebApplication, _conversion_args
 from mutohplot.web_profiles import PenProfileStore, standard_profile
 
 SIMPLE_HPGL = "IN;SP1;PA0,0;PD4000,2000;PU;"
@@ -107,6 +107,24 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
     preview = app.state.prepared[result["token"]].preview_svg
     assert f'width="{width}mm"' in preview
     assert f'height="{height}mm"' in preview
+    assert result["paper"] == paper
+    assert result["paper_width_mm"] == width
+    assert result["paper_height_mm"] == height
+
+
+def test_web_queues_changed_options_during_active_preview():
+    assert "if(previewBusy){previewQueued=true" in PAGE
+    assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
+    assert "$('paper').onchange=requestPreview" in PAGE
+    assert "const format=j.paper.toUpperCase()" in PAGE
+
+
+def test_web_shows_paper_plot_margin_and_scale_summary_above_preview():
+    assert 'class="plot-info" id="plotinfo"' in PAGE
+    for heading in ("Blatt", "Plot", "Ränder", "Skalierung"):
+        assert f"<strong>{heading}</strong>" in PAGE
+    assert "function renderPlotInfo(j)" in PAGE
+    assert "renderPlotControls();renderPlotInfo(j)" in PAGE
 
 
 def test_prepare_svg_rejects_document_without_supported_geometry():
@@ -186,7 +204,7 @@ def test_prepare_rejects_unknown_file_type():
 def test_start_sends_prepared_data_with_safe_serial_defaults():
     calls = []
 
-    def sender(data, settings, profile, progress):
+    def sender(data, settings, profile, progress, control=None):
         calls.append((data, settings, profile))
         progress(len(data), len(data))
 
@@ -214,7 +232,7 @@ def test_start_rejects_unknown_or_stale_preview():
 def test_shutdown_waits_for_active_transmission():
     release = threading.Event()
 
-    def sender(data, settings, profile, progress):
+    def sender(data, settings, profile, progress, control=None):
         release.wait(2)
         progress(len(data), len(data))
 
@@ -230,6 +248,56 @@ def test_shutdown_waits_for_active_transmission():
     release.set()
     assert done.wait(2)
     assert app.state.snapshot()["status"] == "complete"
+
+
+def test_plot_can_be_paused_and_resumed():
+    sender_started = threading.Event()
+    enter_control = threading.Event()
+
+    def sender(data, settings, profile, progress, control=None):
+        sender_started.set()
+        enter_control.wait(2)
+        control()
+        progress(len(data), len(data))
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+    assert sender_started.wait(2)
+
+    app.control("pause")
+    assert app.state.snapshot()["status"] == "paused"
+    enter_control.set()
+    time.sleep(0.05)
+    assert app.state.transmission_done.is_set() is False
+
+    app.control("resume")
+    assert app.state.transmission_done.wait(2)
+    assert app.state.snapshot()["status"] == "complete"
+
+
+def test_plot_can_be_cancelled_while_paused():
+    sender_started = threading.Event()
+    enter_control = threading.Event()
+
+    def sender(data, settings, profile, progress, control=None):
+        sender_started.set()
+        enter_control.wait(2)
+        control()
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+    assert sender_started.wait(2)
+
+    app.control("pause")
+    app.control("cancel")
+    enter_control.set()
+
+    assert app.state.transmission_done.wait(2)
+    snapshot = app.state.snapshot()
+    assert snapshot["status"] == "cancelled"
+    assert "RESET" in snapshot["message"]
 
 
 def test_conversion_options_preserve_a3_and_calibration_defaults():

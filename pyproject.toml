@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mutohplot"
-version = "0.0.18"
+version = "0.0.19"
 description = "Modern HPGL and SVG toolkit for vintage pen plotters"
 readme = "README.md"
 requires-python = ">=3.11"

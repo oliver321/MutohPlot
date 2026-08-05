@@ -119,6 +119,14 @@ def test_web_queues_changed_options_during_active_preview():
     assert "const format=j.paper.toUpperCase()" in PAGE
 
 
+def test_web_shows_paper_plot_margin_and_scale_summary_above_preview():
+    assert 'class="plot-info" id="plotinfo"' in PAGE
+    for heading in ("Blatt", "Plot", "Ränder", "Skalierung"):
+        assert f"<strong>{heading}</strong>" in PAGE
+    assert "function renderPlotInfo(j)" in PAGE
+    assert "renderPlotControls();renderPlotInfo(j)" in PAGE
+
+
 def test_prepare_svg_rejects_document_without_supported_geometry():
     app = WebApplication()
     text_only = (

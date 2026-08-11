@@ -180,9 +180,11 @@ def test_queue_uses_confirmed_server_order_and_visible_feedback():
     assert "renderQueue(data.queue)" in PAGE
     assert "Reihenfolge gespeichert" in PAGE
     assert "if(queueBusy)return" in PAGE
+    assert "['start',item.status==='prepared'?'Plotten':'Erneut plotten','']" in PAGE
+    assert "['remove','Entfernen','']" in PAGE
     assert "['up','↑','Nach oben']" in PAGE
     assert "['down','↓','Nach unten']" in PAGE
-    assert "flex-wrap:nowrap" in PAGE
+    assert "grid-template-columns:8rem 6.5rem 2.4rem 2.4rem" in PAGE
     assert "white-space:nowrap" in PAGE
 
 

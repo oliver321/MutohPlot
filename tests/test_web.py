@@ -175,6 +175,14 @@ def test_web_shows_paper_plot_margin_and_scale_summary_above_preview():
     assert "renderPlotControls();renderPlotInfo(j)" in PAGE
 
 
+def test_queue_uses_confirmed_server_order_and_visible_feedback():
+    assert "renderQueue(data.queue)" in PAGE
+    assert "Reihenfolge gespeichert" in PAGE
+    assert "if(queueBusy)return" in PAGE
+    assert "↑ Nach oben" in PAGE
+    assert "↓ Nach unten" in PAGE
+
+
 def test_prepare_svg_rejects_document_without_supported_geometry():
     app = WebApplication()
     text_only = (

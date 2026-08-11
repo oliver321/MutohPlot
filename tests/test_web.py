@@ -120,6 +120,10 @@ def test_prepare_calibration_adds_preview_to_queue():
     assert prepared.data.startswith(b"IN;")
     assert "<svg" in prepared.preview_svg
     assert "Kalibrierungszeichnung erzeugen" in PAGE
+    for field in ("caltop", "calbottom", "calleft", "calright"):
+        assert f'id="{field}"' in PAGE
+    assert "Messwerte berechnen" in PAGE
+    assert "Gemessene Zeichenfläche" in PAGE
 
 
 def test_prepare_svg_auto_rotation_selects_larger_fit():

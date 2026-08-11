@@ -1,4 +1,4 @@
-# MutohPlot v0.0.21.dev2
+# MutohPlot v0.0.21.dev3
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.

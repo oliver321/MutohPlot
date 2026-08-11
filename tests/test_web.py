@@ -53,6 +53,9 @@ def test_prepare_keeps_multiple_jobs_in_queue():
     assert first["token"] in app.state.prepared
     assert second["token"] in app.state.prepared
     assert [item["name"] for item in app.queue_snapshot()] == ["one.hpgl", "two.hpgl"]
+    assert app.queue_snapshot()[0]["position"] == 1
+    assert app.queue_snapshot()[0]["plot_width_mm"] > 0
+    assert app.queue_snapshot()[0]["plot_height_mm"] > 0
 
 
 def test_queue_can_be_reordered_and_removed():
@@ -62,6 +65,7 @@ def test_queue_can_be_reordered_and_removed():
 
     app.change_queue(second["token"], "up")
     assert [item["name"] for item in app.queue_snapshot()] == ["two.hpgl", "one.hpgl"]
+    assert [item["position"] for item in app.queue_snapshot()] == [1, 2]
 
     app.change_queue(first["token"], "remove")
     assert [item["name"] for item in app.queue_snapshot()] == ["two.hpgl"]

@@ -393,10 +393,15 @@ def test_plot_can_be_cancelled_while_paused():
     restarted = WebApplication()
     assert restarted.queue_snapshot()[0]["status"] == "cancelled"
     token = prepared["token"]
-    with pytest.raises(RuntimeError, match="entfernen"):
-        app.start(token, "/dev/ttyUSB0", "small")
-    app.change_queue(token, "remove")
+    app.start(token, "/dev/ttyUSB0", "small")
+    assert app.state.transmission_done.wait(2)
     assert app.queue_snapshot() == []
+
+
+def test_cancelled_queue_item_offers_guarded_retry():
+    assert "Erneut plotten" in PAGE
+    assert "LOCAL und RESET" in PAGE
+    assert "['prepared','cancelled','error']" in PAGE
 
 
 def test_conversion_options_preserve_a3_and_calibration_defaults():

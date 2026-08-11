@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
 
-from .calibration import create_a3_calibration
+from .calibration import create_calibration
 from .devices.mutoh_xp500 import MutohXP500
 from .document import PlotDocument
 from .geometry.point import Point
@@ -141,7 +141,7 @@ def parser():
 
     cal = sub.add_parser("calibrate")
     cal.add_argument("output")
-    cal.add_argument("--paper", choices=["a3"], default="a3")
+    cal.add_argument("--paper", choices=["a3", "a2", "a1", "a0"], default="a3")
     cal.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
     cal.add_argument("--margin", type=float, default=0.0)
     cal.add_argument("--device-unit", type=float, default=0.01)
@@ -820,11 +820,11 @@ def main():
         return
 
     elif args.command == "calibrate":
-        paper = get_paper("a3")
+        paper = get_paper(args.paper)
         profile = get_hard_clip(args.window)
         hard = drawable_area(paper, profile, 0)
         safe = drawable_area(paper, profile, args.margin)
-        document = create_a3_calibration(args.window, args.margin)
+        document = create_calibration(args.paper, args.window, args.margin)
         base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
         correction = hard_clip_center_correction(profile)
         auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm

@@ -34,8 +34,10 @@ def _circle(doc: PlotDocument, cx: float, cy: float, radius: float, pen: int = 1
     doc.add_polyline(Polyline(points, pen=pen))
 
 
-def create_a3_calibration(window: str = "norm", margin_mm: float = 0.0) -> PlotDocument:
-    paper = get_paper("a3")
+def create_calibration(
+    paper_name: str = "a3", window: str = "norm", margin_mm: float = 0.0
+) -> PlotDocument:
+    paper = get_paper(paper_name)
     profile = get_hard_clip(window)
     hard = drawable_area(paper, profile, 0.0)
     safe = drawable_area(paper, profile, margin_mm)
@@ -44,7 +46,7 @@ def create_a3_calibration(window: str = "norm", margin_mm: float = 0.0) -> PlotD
         metadata={
             "page_width_mm": paper.width_mm,
             "page_height_mm": paper.height_mm,
-            "paper": "A3",
+            "paper": paper.name,
             "hard_clip_profile": profile.name,
             "calibration": True,
         }
@@ -93,3 +95,8 @@ def create_a3_calibration(window: str = "norm", margin_mm: float = 0.0) -> PlotD
     _line(doc, hard.x_max_mm, hcy - tick, hard.x_max_mm, hcy + tick, pen=2)
 
     return doc
+
+
+def create_a3_calibration(window: str = "norm", margin_mm: float = 0.0) -> PlotDocument:
+    """Backward-compatible A3 calibration helper."""
+    return create_calibration("a3", window, margin_mm)

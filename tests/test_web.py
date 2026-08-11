@@ -180,8 +180,10 @@ def test_queue_uses_confirmed_server_order_and_visible_feedback():
     assert "renderQueue(data.queue)" in PAGE
     assert "Reihenfolge gespeichert" in PAGE
     assert "if(queueBusy)return" in PAGE
-    assert "↑ Nach oben" in PAGE
-    assert "↓ Nach unten" in PAGE
+    assert "['up','↑','Nach oben']" in PAGE
+    assert "['down','↓','Nach unten']" in PAGE
+    assert "flex-wrap:nowrap" in PAGE
+    assert "white-space:nowrap" in PAGE
 
 
 def test_prepare_svg_rejects_document_without_supported_geometry():

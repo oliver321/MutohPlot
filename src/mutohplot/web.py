@@ -9,9 +9,12 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import PackageNotFoundError, version
+from inspect import signature
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -20,9 +23,11 @@ from .devices.mutoh_xp500 import MutohXP500
 from .hard_clip import drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
+from .job_history import JobHistory
 from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
 from .paper import get_paper
+from .prepared_queue import PreparedQueueStore
 from .report import check_bounds
 from .serial_io import (
     BUFFER_PROFILES,
@@ -41,6 +46,15 @@ from .web_profiles import TYPE_LABELS, PenProfileStore
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 # JSON escaping adds overhead. The actual file-size limit is checked separately.
 MAX_REQUEST_BYTES = 40 * 1024 * 1024
+MAX_QUEUE_ITEMS = 20
+
+
+def package_version() -> str:
+    """Return the installed package version without breaking source checkouts."""
+    try:
+        return version("mutohplot")
+    except PackageNotFoundError:
+        return "development"
 
 
 @dataclass(slots=True)
@@ -67,10 +81,16 @@ class PlotState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.prepared: dict[str, PreparedPlot] = {}
+        self.queue: list[str] = []
         self.status = "idle"
         self.sent = 0
         self.total = 0
         self.message = "Bereit"
+        self.name: str | None = None
+        self.port: str | None = None
+        self.started_at: str | None = None
+        self.finished_at: str | None = None
+        self.job_id: str | None = None
         self.transmission_done = threading.Event()
         self.transmission_done.set()
         self.transmission_resumed = threading.Event()
@@ -81,10 +101,16 @@ class PlotState:
     def snapshot(self) -> dict:
         with self.lock:
             return {
+                "version": package_version(),
                 "status": self.status,
                 "sent": self.sent,
                 "total": self.total,
                 "message": self.message,
+                "name": self.name,
+                "port": self.port,
+                "started_at": self.started_at,
+                "finished_at": self.finished_at,
+                "job_id": self.job_id,
                 "shutdown_requested": self.shutdown_requested,
             }
 
@@ -166,10 +192,20 @@ def _conversion_args(options: dict) -> argparse.Namespace:
 
 
 class WebApplication:
-    def __init__(self, sender: Callable = send_bytes, profile_store=None) -> None:
+    def __init__(
+        self, sender: Callable = send_bytes, profile_store=None, job_history=None, queue_store=None
+    ) -> None:
         self.state = PlotState()
         self.sender = sender
         self.profiles = profile_store or PenProfileStore()
+        self.jobs = job_history or JobHistory()
+        self.queue_store = queue_store or PreparedQueueStore()
+        for stored in self.queue_store.snapshot():
+            if stored.get("bounds") is not None:
+                stored["bounds"] = tuple(stored["bounds"])
+            prepared = PreparedPlot(**stored)
+            self.state.prepared[prepared.token] = prepared
+            self.state.queue.append(prepared.token)
 
     @staticmethod
     def _write_pen_config(profile: dict, path: Path) -> None:
@@ -267,6 +303,9 @@ class WebApplication:
         return output, document, fit_scale, rotation, color_to_pen, warnings
 
     def prepare(self, name: str, source: str, options: dict) -> dict:
+        with self.state.lock:
+            if len(self.state.queue) >= MAX_QUEUE_ITEMS:
+                raise RuntimeError("Die Warteschlange enthält bereits 20 Aufträge")
         if not source.strip():
             raise ValueError("Die Plotdatei ist leer")
         if len(source.encode("utf-8")) > MAX_UPLOAD_BYTES:
@@ -317,8 +356,24 @@ class WebApplication:
             profile_pens=profile["pens"],
         )
         with self.state.lock:
-            self.state.prepared = {token: prepared}
+            self.state.prepared[token] = prepared
+            self.state.queue.append(token)
             self.state.message = f"{prepared.name} geprüft und bereit"
+        self.queue_store.append(asdict(prepared))
+        self.jobs.add(
+            {
+                "id": token,
+                "name": prepared.name,
+                "status": "prepared",
+                "created_at": datetime.now(UTC).isoformat(),
+                "started_at": None,
+                "finished_at": None,
+                "port": None,
+                "sent": 0,
+                "total": len(prepared.data),
+                "message": "Geprüft und bereit",
+            }
+        )
         paper = get_paper(args.paper, args.landscape)
         return {
             "token": token,
@@ -343,6 +398,62 @@ class WebApplication:
             "profile_pens": prepared.profile_pens,
         }
 
+    def queue_snapshot(self) -> list[dict]:
+        with self.state.lock:
+            active_id = self.state.job_id
+            active_status = self.state.status
+            return [
+                {
+                    "token": token,
+                    "name": self.state.prepared[token].name,
+                    "bytes": len(self.state.prepared[token].data),
+                    "profile_name": self.state.prepared[token].profile_name,
+                    "status": active_status if token == active_id else "prepared",
+                }
+                for token in self.state.queue
+                if token in self.state.prepared
+            ]
+
+    def change_queue(self, token: str, action: str) -> list[dict]:
+        with self.state.lock:
+            if token not in self.state.queue:
+                raise ValueError("Auftrag ist nicht mehr in der Warteschlange")
+            if token == self.state.job_id and self.state.status in {
+                "sending",
+                "waiting_xon",
+                "paused",
+                "cancelling",
+            }:
+                raise RuntimeError("Ein laufender Auftrag kann nicht verändert werden")
+            index = self.state.queue.index(token)
+            if action == "up" and index > 0:
+                self.state.queue[index - 1], self.state.queue[index] = (
+                    self.state.queue[index],
+                    self.state.queue[index - 1],
+                )
+            elif action == "down" and index < len(self.state.queue) - 1:
+                self.state.queue[index + 1], self.state.queue[index] = (
+                    self.state.queue[index],
+                    self.state.queue[index + 1],
+                )
+            elif action == "remove":
+                self.state.queue.remove(token)
+                self.state.prepared.pop(token, None)
+            elif action not in {"up", "down"}:
+                raise ValueError("Unbekannte Warteschlangenaktion")
+        if action == "remove":
+            self.queue_store.remove(token)
+            now = datetime.now(UTC).isoformat()
+            self.jobs.update(
+                token,
+                status="removed",
+                message="Aus Warteschlange entfernt",
+                finished_at=now,
+            )
+        else:
+            self.queue_store.reorder([item["token"] for item in self.queue_snapshot()])
+        return self.queue_snapshot()
+
     def start(self, token: str, port: str, buffer_profile: str) -> None:
         if buffer_profile not in BUFFER_PROFILES:
             raise ValueError("Unbekanntes Pufferprofil")
@@ -351,18 +462,32 @@ class WebApplication:
         with self.state.lock:
             if self.state.shutdown_requested:
                 raise RuntimeError("Der Webdienst wartet auf einen sicheren Neustart")
-            if self.state.status in {"sending", "paused", "cancelling"}:
+            if self.state.status in {"sending", "waiting_xon", "paused", "cancelling"}:
                 raise RuntimeError("Es läuft bereits ein Plotauftrag")
             prepared = self.state.prepared.get(token)
             if prepared is None:
                 raise ValueError("Die Vorschau ist nicht mehr aktuell; bitte erneut prüfen")
+            if token not in self.state.queue:
+                raise ValueError("Der Auftrag ist nicht mehr in der Warteschlange")
             self.state.status = "sending"
             self.state.sent = 0
             self.state.total = len(prepared.data)
             self.state.message = f"Sende {prepared.name}"
+            self.state.name = prepared.name
+            self.state.port = port
+            self.state.started_at = datetime.now(UTC).isoformat()
+            self.state.finished_at = None
+            self.state.job_id = token
             self.state.transmission_done.clear()
             self.state.transmission_resumed.set()
             self.state.transmission_cancelled.clear()
+        self.jobs.update(
+            token,
+            status="sending",
+            port=port,
+            started_at=self.state.started_at,
+            message=f"Sende {prepared.name}",
+        )
 
         settings = SerialSettings(port=port, baudrate=19200, xonxoff=True)
 
@@ -370,6 +495,7 @@ class WebApplication:
             with self.state.lock:
                 self.state.sent = sent
                 self.state.total = total
+            self.jobs.update(token, persist=False, sent=sent, total=total)
 
         def control() -> None:
             if self.state.transmission_cancelled.is_set():
@@ -378,14 +504,26 @@ class WebApplication:
                 if self.state.transmission_cancelled.is_set():
                     raise SerialTransmissionCancelled("Plotauftrag abgebrochen")
 
+        def flow_control(waiting: bool) -> None:
+            with self.state.lock:
+                if waiting and self.state.status == "sending":
+                    self.state.status = "waiting_xon"
+                    self.state.message = "Plotter pausiert die Übertragung · wartet auf XON"
+                elif not waiting and self.state.status == "waiting_xon":
+                    self.state.status = "sending"
+                    self.state.message = f"Sende {prepared.name}"
+
         def transmit() -> None:
             try:
+                sender_kwargs = {"control": control}
+                if "flow_control" in signature(self.sender).parameters:
+                    sender_kwargs["flow_control"] = flow_control
                 self.sender(
                     prepared.data,
                     settings,
                     BUFFER_PROFILES[buffer_profile],
                     progress,
-                    control=control,
+                    **sender_kwargs,
                 )
             except SerialTransmissionCancelled:
                 with self.state.lock:
@@ -402,6 +540,26 @@ class WebApplication:
                     self.state.status = "complete"
                     self.state.message = "Plotauftrag vollständig übertragen"
             finally:
+                with self.state.lock:
+                    self.state.finished_at = datetime.now(UTC).isoformat()
+                    final_status = self.state.status
+                    final_message = self.state.message
+                    final_sent = self.state.sent
+                    final_total = self.state.total
+                    finished_at = self.state.finished_at
+                self.jobs.update(
+                    token,
+                    status=final_status,
+                    message=final_message,
+                    sent=final_sent,
+                    total=final_total,
+                    finished_at=finished_at,
+                )
+                with self.state.lock:
+                    if token in self.state.queue:
+                        self.state.queue.remove(token)
+                    self.state.prepared.pop(token, None)
+                self.queue_store.remove(token)
                 self.state.transmission_done.set()
 
         threading.Thread(target=transmit, name="mutohplot-send", daemon=False).start()
@@ -409,7 +567,7 @@ class WebApplication:
     def control(self, action: str) -> None:
         with self.state.lock:
             if action == "pause":
-                if self.state.status != "sending":
+                if self.state.status not in {"sending", "waiting_xon"}:
                     raise RuntimeError("Der Plotauftrag kann jetzt nicht angehalten werden")
                 self.state.transmission_resumed.clear()
                 self.state.status = "paused"
@@ -421,7 +579,7 @@ class WebApplication:
                 self.state.status = "sending"
                 self.state.message = "Übertragung fortgesetzt · Go"
             elif action == "cancel":
-                if self.state.status not in {"sending", "paused"}:
+                if self.state.status not in {"sending", "waiting_xon", "paused"}:
                     raise RuntimeError("Es läuft kein Plotauftrag")
                 self.state.status = "cancelling"
                 self.state.message = "Plotauftrag wird abgebrochen"
@@ -488,6 +646,10 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             result["pen_types"] = TYPE_LABELS
             result["pen_widths"] = [0.3, 0.5, 0.7, 1.0, 1.5]
             self._json(result)
+        elif path == "/api/jobs":
+            self._json({"jobs": self.app.jobs.snapshot()})
+        elif path == "/api/queue":
+            self._json({"queue": self.app.queue_snapshot(), "limit": MAX_QUEUE_ITEMS})
         elif path.startswith("/api/preview/"):
             token = path.rsplit("/", 1)[-1]
             with self.app.state.lock:
@@ -527,6 +689,11 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             elif path == "/api/plot/control":
                 self.app.control(str(payload.get("action", "")))
                 self._json({"status": self.app.state.snapshot()["status"]}, HTTPStatus.ACCEPTED)
+            elif path == "/api/queue/control":
+                queue = self.app.change_queue(
+                    str(payload.get("token", "")), str(payload.get("action", ""))
+                )
+                self._json({"queue": queue})
             elif path == "/api/profiles/save":
                 profile = self.app.profiles.put(
                     payload.get("profile"), payload.get("previous_name")
@@ -596,8 +763,9 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 .facts{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.9rem;margin-top:1rem}.facts span:nth-child(odd){color:#64736b}
 .profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.profile-actions button{margin-top:.4rem}.pen-row{border-top:1px solid #dde3df;padding:.5rem 0}.pen-row strong{display:block}.pen-row .checks{margin:.3rem 0}.pen-row input,.pen-row select{padding:.4rem}
 .plot-actions{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}.plot-actions button{margin-top:1rem}.danger{background:#a52a2a}
+.queue-card,.history-card{grid-column:1/-1}.jobs,.queue{display:grid;gap:.5rem}.job,.queue-item{display:grid;grid-template-columns:2fr 1fr 1fr 2fr;gap:.7rem;padding:.7rem;border-radius:8px;background:#e7eee9;align-items:center}.job strong,.job span,.queue-item strong{overflow:hidden;text-overflow:ellipsis}.job .complete{color:#176b4c}.job .error,.job .cancelled{color:#a52a2a}.queue-actions{display:flex;gap:.35rem}.queue-actions button{width:auto;margin:0;padding:.45rem .65rem}.queue-actions .remove{background:#7d4038}
 @media(max-width:900px){.plot-info{grid-template-columns:1fr 1fr}}@media(max-width:760px){main{grid-template-columns:1fr}.preview{min-height:300px}}
-</style></head><body><header><h1>MutohPlot · XP-500 <small>Web 0.7</small></h1></header><main>
+</style></head><body><header><h1>MutohPlot · XP-500 <small id="version">Version wird geladen</small></h1></header><main>
 <section class="card"><h2>Plot vorbereiten</h2><label>HP-GL- oder SVG-Datei</label><input id="file" type="file" accept=".hpgl,.plt,.svg,image/svg+xml"><small>Die Vorschau wird direkt nach der Auswahl erzeugt. Maximal 20 MB.</small><div id="selection" class="status">Noch keine Datei ausgewählt</div>
 <label>Stiftprofil</label><select id="profile"></select>
 <details><summary>Stifte konfigurieren</summary><div class="profile-actions"><button id="newprofile">Neues Profil</button><button id="saveprofile">Speichern</button><button id="defaultprofile">Als Standard</button><button id="deleteprofile">Löschen</button></div><div id="peneditor"></div></details>
@@ -611,16 +779,21 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
 <div class="plot-actions"><button id="plot" disabled>Plot starten</button><button id="abort" class="danger" hidden>Abbruch</button></div><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
-<section class="card preview-card"><div class="plot-info" id="plotinfo"><div><strong>Blatt</strong><span>–</span></div><div><strong>Plot</strong><span>–</span></div><div><strong>Ränder</strong><span>–</span></div><div><strong>Skalierung</strong><span>–</span></div></div><div class="preview" id="preview"><p>Hier erscheint die Vorschau.</p></div></section></main><script>
+<section class="card preview-card"><div class="plot-info" id="plotinfo"><div><strong>Blatt</strong><span>–</span></div><div><strong>Plot</strong><span>–</span></div><div><strong>Ränder</strong><span>–</span></div><div><strong>Skalierung</strong><span>–</span></div></div><div class="preview" id="preview"><p>Hier erscheint die Vorschau.</p></div></section>
+<section class="card queue-card"><h2>Warteschlange</h2><p>Jeder Auftrag wird einzeln bestätigt und gestartet.</p><div class="queue" id="queue"><span>Keine vorbereiteten Aufträge</span></div></section>
+<section class="card history-card"><h2>Letzte Aufträge</h2><div class="jobs" id="jobs"><span>Noch keine Aufträge</span></div></section></main><script>
 let token=null,localMessage='',penMap={},mappingType='',mappingProfilePens={},profileData=null,editingOriginal=null,plotStatus='idle',plotStarted=false,previewBusy=false,previewQueued=false; const $=id=>document.getElementById(id);
 async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):null});const j=await r.json();if(!r.ok)throw Error(j.error||'Fehler');return j}
 function currentProfile(){return profileData?.profiles[$('profile').value]}
 function renderProfile(){const profile=currentProfile(),box=$('peneditor');box.replaceChildren();if(!profile)return;for(let n=1;n<=8;n++){const pen=profile.pens[n],row=document.createElement('div');row.className='pen-row';const title=document.createElement('strong');title.textContent=`Stift ${n}`;const label=document.createElement('input');label.value=pen.label;label.onchange=()=>pen.label=label.value;const line=document.createElement('div');line.className='checks';const type=document.createElement('select');for(const [value,text] of Object.entries(profileData.pen_types)){const option=document.createElement('option');option.value=value;option.textContent=text;option.selected=value===pen.type;type.append(option)}type.onchange=()=>pen.type=type.value;const width=document.createElement('select');for(const value of profileData.pen_widths){const option=document.createElement('option');option.value=value;option.textContent=`${String(value).replace('.',',')} mm`;option.selected=value===pen.width_mm;width.append(option)}width.onchange=()=>pen.width_mm=+width.value;const color=document.createElement('input');color.type='color';color.value=/^#[0-9a-f]{6}$/i.test(pen.color)?pen.color:'#000000';color.onchange=()=>pen.color=color.value;line.append(type,width,color);row.append(title,label,line);box.append(row)}}
 async function loadProfiles(selected){profileData=await api('/api/profiles');const select=$('profile');select.replaceChildren();for(const name of Object.keys(profileData.profiles)){const option=document.createElement('option');option.value=name;option.textContent=name+(name===profileData.default?' · Standard':'');select.append(option)}select.value=selected&&profileData.profiles[selected]?selected:profileData.default;editingOriginal=select.value;renderProfile()}
 function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;requestPreview()};row.append(swatch,text,select);box.append(row)}}
-function renderPlotControls(){const active=['sending','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':plotStatus==='sending'?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
+function renderPlotControls(){const active=['sending','waiting_xon','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':['sending','waiting_xon'].includes(plotStatus)?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
 function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`;$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
-async function status(){try{const s=await api('/api/status');plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
+async function loadJobs(){try{const data=await api('/api/jobs'),box=$('jobs');box.replaceChildren();if(!data.jobs.length){box.textContent='Noch keine Aufträge';return}for(const j of data.jobs.slice(0,10)){const row=document.createElement('div');row.className='job';const name=document.createElement('strong');name.textContent=j.name;const state=document.createElement('span');state.className=j.status;state.textContent=j.status;const progress=document.createElement('span');progress.textContent=j.total?`${Math.round(j.sent*100/j.total)} %`:'–';const time=document.createElement('span');time.textContent=new Date(j.started_at||j.created_at).toLocaleString('de-DE');row.append(name,state,progress,time);box.append(row)}}catch(e){$('jobs').textContent=e.message}}
+async function queueAction(item,action){if(action==='start'){if(!confirm(`Plot ${item.name} jetzt starten? Der Plotter beginnt sich zu bewegen.`))return;await api('/api/plot',{token:item.token,port:$('port').value,buffer_profile:$('buffer').value});token=item.token;plotStarted=true;plotStatus='sending';renderPlotControls()}else{await api('/api/queue/control',{token:item.token,action})}await loadQueue();await loadJobs()}
+async function loadQueue(){try{const data=await api('/api/queue'),box=$('queue');box.replaceChildren();if(!data.queue.length){box.textContent='Keine vorbereiteten Aufträge';return}for(const item of data.queue){const row=document.createElement('div');row.className='queue-item';const name=document.createElement('strong');name.textContent=item.name;const profile=document.createElement('span');profile.textContent=item.profile_name;const size=document.createElement('span');size.textContent=`${item.bytes} Bytes`;const actions=document.createElement('div');actions.className='queue-actions';for(const [action,label] of [['up','↑'],['down','↓'],['remove','Entfernen'],['start','Plotten']]){const button=document.createElement('button');button.textContent=label;if(action==='remove')button.className='remove';button.disabled=item.status!=='prepared';button.onclick=()=>queueAction(item,action).catch(e=>{$('status').textContent=e.message});actions.append(button)}row.append(name,profile,size,actions);box.append(row)}}catch(e){$('queue').textContent=e.message}}
+async function status(){try{const s=await api('/api/status');$('version').textContent=`v${s.version}`;plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
 function requestPreview(){if(!$('file').files[0])return;token=null;plotStarted=false;renderPlotControls();if(previewBusy){previewQueued=true;localMessage='Einstellung geändert · Vorschau wird anschließend neu berechnet';$('status').textContent=localMessage;return}$('check').click()}
 $('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}previewBusy=true;$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;const isSvg=f.name.toLowerCase().endsWith('.svg'),options={profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap};try{const j=await api('/api/preview',{name:f.name,source:await f.text(),options});if(previewQueued)return;token=j.token;plotStarted=false;renderPlotControls();renderPlotInfo(j);$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=j.paper.toUpperCase()+(j.landscape?' quer':' hoch')+` · ${j.paper_width_mm} × ${j.paper_height_mm} mm`;const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${options.fit?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){if(!previewQueued){token=null;renderPlotControls();localMessage=e.message;$('status').textContent=localMessage}}finally{previewBusy=false;$('check').disabled=false;if(previewQueued){previewQueued=false;requestPreview()}}}
 $('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';requestPreview()};
@@ -633,7 +806,7 @@ $('newprofile').onclick=()=>{const name=prompt('Name des neuen Stiftprofils');if
 $('saveprofile').onclick=async()=>{try{const profile=currentProfile();await api('/api/profiles/save',{profile,previous_name:editingOriginal});await loadProfiles(profile.name);localMessage='';$('status').textContent=`Profil ${profile.name} gespeichert`;requestPreview()}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('defaultprofile').onclick=async()=>{try{await api('/api/profiles/default',{name:$('profile').value});await loadProfiles($('profile').value);$('status').textContent='Standardprofil geändert'}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('deleteprofile').onclick=async()=>{const name=$('profile').value;if(!confirm(`Profil ${name} wirklich löschen?`))return;try{await api('/api/profiles/delete',{name});await loadProfiles();$('status').textContent=`Profil ${name} gelöscht`}catch(e){localMessage=e.message;$('status').textContent=e.message}};
-$('plot').onclick=async()=>{try{if(plotStatus==='sending'){await api('/api/plot/control',{action:'pause'});plotStatus='paused'}else if(plotStatus==='paused'){await api('/api/plot/control',{action:'resume'});plotStatus='sending'}else{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});plotStarted=true;plotStatus='sending'}renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
+$('plot').onclick=async()=>{try{if(['sending','waiting_xon'].includes(plotStatus)){await api('/api/plot/control',{action:'pause'});plotStatus='paused'}else if(plotStatus==='paused'){await api('/api/plot/control',{action:'resume'});plotStatus='sending'}else{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});plotStarted=true;plotStatus='sending'}renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
 $('abort').onclick=async()=>{if(!confirm('Plot wirklich abbrechen? Bereits empfangene Daten müssen am Plotter mit LOCAL und RESET gelöscht werden.'))return;try{await api('/api/plot/control',{action:'cancel'});plotStatus='cancelling';renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
-loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});status();setInterval(status,1000);
+loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});status();loadQueue();loadJobs();setInterval(status,1000);setInterval(()=>{loadQueue();loadJobs()},3000);
 </script></body></html>"""

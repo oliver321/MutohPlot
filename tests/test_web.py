@@ -3,7 +3,8 @@ import time
 
 import pytest
 
-from mutohplot.web import PAGE, WebApplication, _conversion_args
+from mutohplot.job_history import JobHistory
+from mutohplot.web import PAGE, PlotState, WebApplication, _conversion_args
 from mutohplot.web_profiles import PenProfileStore, standard_profile
 
 SIMPLE_HPGL = "IN;SP1;PA0,0;PD4000,2000;PU;"
@@ -12,8 +13,23 @@ SIMPLE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50
 </svg>"""
 
 
-def test_prepare_returns_a3_preview_and_plot_token():
-    app = WebApplication()
+@pytest.fixture(autouse=True)
+def isolated_job_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("MUTOHPLOT_JOB_HISTORY", str(tmp_path / "default-jobs.json"))
+    monkeypatch.setenv("MUTOHPLOT_PREPARED_QUEUE", str(tmp_path / "default-queue.json"))
+
+
+def test_status_exposes_installed_version():
+    snapshot = PlotState().snapshot()
+
+    assert snapshot["version"]
+    assert 'id="version"' in PAGE
+    assert "s.version" in PAGE
+
+
+def test_prepare_returns_a3_preview_and_plot_token(tmp_path):
+    jobs = JobHistory(tmp_path / "jobs.json")
+    app = WebApplication(job_history=jobs)
 
     result = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
 
@@ -26,15 +42,43 @@ def test_prepare_returns_a3_preview_and_plot_token():
     assert "<svg" in preview
     assert 'width="297.0mm"' in preview
     assert result["token"] in app.state.prepared
+    assert jobs.snapshot()[0]["status"] == "prepared"
 
 
-def test_prepare_replaces_previous_approval():
+def test_prepare_keeps_multiple_jobs_in_queue():
     app = WebApplication()
     first = app.prepare("one.hpgl", SIMPLE_HPGL, {"optimize": False})
     second = app.prepare("two.hpgl", SIMPLE_HPGL, {"optimize": False})
 
-    assert first["token"] not in app.state.prepared
+    assert first["token"] in app.state.prepared
     assert second["token"] in app.state.prepared
+    assert [item["name"] for item in app.queue_snapshot()] == ["one.hpgl", "two.hpgl"]
+
+
+def test_queue_can_be_reordered_and_removed():
+    app = WebApplication()
+    first = app.prepare("one.hpgl", SIMPLE_HPGL, {"optimize": False})
+    second = app.prepare("two.hpgl", SIMPLE_HPGL, {"optimize": False})
+
+    app.change_queue(second["token"], "up")
+    assert [item["name"] for item in app.queue_snapshot()] == ["two.hpgl", "one.hpgl"]
+
+    app.change_queue(first["token"], "remove")
+    assert [item["name"] for item in app.queue_snapshot()] == ["two.hpgl"]
+    removed = next(job for job in app.jobs.snapshot() if job["id"] == first["token"])
+    assert removed["status"] == "removed"
+
+
+def test_prepared_queue_survives_application_restart():
+    first_app = WebApplication()
+    first_app.prepare("restart.hpgl", SIMPLE_HPGL, {"optimize": False})
+
+    restarted_app = WebApplication()
+
+    assert [item["name"] for item in restarted_app.queue_snapshot()] == ["restart.hpgl"]
+    restored = next(iter(restarted_app.state.prepared.values()))
+    assert restored.data.startswith(b"IN;")
+    assert "<svg" in restored.preview_svg
 
 
 def test_prepare_svg_fits_to_a3_and_reports_pen_mapping():
@@ -201,14 +245,15 @@ def test_prepare_rejects_unknown_file_type():
         app.prepare("zeichnung.txt", SIMPLE_HPGL, {})
 
 
-def test_start_sends_prepared_data_with_safe_serial_defaults():
+def test_start_sends_prepared_data_with_safe_serial_defaults(tmp_path):
     calls = []
 
     def sender(data, settings, profile, progress, control=None):
         calls.append((data, settings, profile))
         progress(len(data), len(data))
 
-    app = WebApplication(sender=sender)
+    jobs = JobHistory(tmp_path / "jobs.json")
+    app = WebApplication(sender=sender, job_history=jobs)
     prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
     app.start(prepared["token"], "/dev/ttyUSB0", "small")
 
@@ -218,9 +263,42 @@ def test_start_sends_prepared_data_with_safe_serial_defaults():
         time.sleep(0.01)
 
     assert app.state.snapshot()["status"] == "complete"
+    assert app.state.snapshot()["name"] == "test.hpgl"
+    assert app.state.snapshot()["port"] == "/dev/ttyUSB0"
+    assert app.state.snapshot()["started_at"]
+    assert app.state.snapshot()["finished_at"]
     assert calls[0][1].baudrate == 19200
     assert calls[0][1].xonxoff is True
     assert calls[0][2].name == "small"
+    assert jobs.snapshot()[0]["status"] == "complete"
+    assert jobs.snapshot()[0]["sent"] == jobs.snapshot()[0]["total"]
+    assert app.state.transmission_done.wait(2)
+    assert app.queue_snapshot() == []
+
+
+def test_xoff_wait_is_visible_in_web_status():
+    waiting = threading.Event()
+    resume = threading.Event()
+
+    def sender(data, settings, profile, progress, control=None, flow_control=None):
+        flow_control(True)
+        waiting.set()
+        resume.wait(2)
+        flow_control(False)
+        progress(len(data), len(data))
+
+    app = WebApplication(sender=sender)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+    app.start(prepared["token"], "/dev/ttyUSB0", "small")
+
+    assert waiting.wait(2)
+    snapshot = app.state.snapshot()
+    assert snapshot["status"] == "waiting_xon"
+    assert "XON" in snapshot["message"]
+
+    resume.set()
+    assert app.state.transmission_done.wait(2)
+    assert app.state.snapshot()["status"] == "complete"
 
 
 def test_start_rejects_unknown_or_stale_preview():

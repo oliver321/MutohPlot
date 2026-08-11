@@ -1,4 +1,4 @@
-# MutohPlot v0.0.19
+# MutohPlot v0.0.20.dev5
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.
@@ -17,6 +17,19 @@ pip install -e .
 pip install pytest
 pytest
 ```
+
+## Raspberry-Pi-Deployment
+
+Das Deployment legt jede Version in einem eigenen Release-Verzeichnis ab,
+testet sie vor der Aktivierung und schaltet erst danach den Webdienst um. Bei
+einer fehlgeschlagenen Gesundheitsprüfung wird automatisch auf das vorherige
+Release zurückgeschaltet. Die Stiftprofile werden vor jedem Update gesichert.
+
+```bash
+./deploy/deploy.sh
+```
+
+Die aktive Version erscheint in der Weboberfläche und unter `/api/status`.
 
 ## Optimierte A3-Konvertierung
 ```bash

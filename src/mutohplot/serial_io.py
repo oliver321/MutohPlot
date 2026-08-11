@@ -137,9 +137,12 @@ def wait_until_resumed(
     sleeper=sleep,
     clock=monotonic,
     control=None,
+    flow_control=None,
 ) -> bool:
     paused = read_flow_control(connection, paused)
     pause_started = clock() if paused else None
+    if paused and flow_control:
+        flow_control(True)
     while paused:
         if control:
             control()
@@ -149,6 +152,8 @@ def wait_until_resumed(
             )
         sleeper(FLOW_CONTROL_POLL_S)
         paused = read_flow_control(connection, paused)
+    if pause_started is not None and flow_control:
+        flow_control(False)
     return paused
 
 
@@ -160,6 +165,7 @@ def send_bytes(
     connection_factory=None,
     sleeper=sleep,
     control=None,
+    flow_control=None,
 ):
     connection = (connection_factory or open_serial)(settings)
     sent = 0
@@ -177,6 +183,7 @@ def send_bytes(
                     settings.port,
                     sleeper,
                     control=control,
+                    flow_control=flow_control,
                 )
             block = data[sent : sent + profile.chunk_size]
             try:

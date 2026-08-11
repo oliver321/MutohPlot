@@ -177,6 +177,7 @@ def test_xonxoff_reset_failure_closes_port_with_context():
 def test_userspace_xoff_pauses_until_xon():
     fake = Fake(incoming=b"\x13")
     sleeps = []
+    flow_events = []
 
     def resume_after_first_poll(delay):
         sleeps.append(delay)
@@ -188,11 +189,13 @@ def test_userspace_xoff_pauses_until_xon():
         BUFFER_PROFILES["large"],
         connection_factory=lambda _: fake,
         sleeper=resume_after_first_poll,
+        flow_control=flow_events.append,
     )
 
     assert sent == 3
     assert sleeps == [0.05]
     assert bytes(fake.data) == b"123"
+    assert flow_events == [True, False]
 
 
 def test_latest_flow_control_character_wins():

@@ -108,6 +108,20 @@ def test_prepare_svg_with_default_path_optimization():
     assert result["polylines"] == 1
 
 
+def test_prepare_calibration_adds_preview_to_queue():
+    app = WebApplication()
+
+    result = app.prepare_calibration({"paper": "a2", "window": "norm", "margin": 5})
+
+    assert result["paper"] == "a2"
+    assert result["name"] == "Kalibrierung_A2_norm.hpgl"
+    assert app.queue_snapshot()[0]["name"] == result["name"]
+    prepared = app.state.prepared[result["token"]]
+    assert prepared.data.startswith(b"IN;")
+    assert "<svg" in prepared.preview_svg
+    assert "Kalibrierungszeichnung erzeugen" in PAGE
+
+
 def test_prepare_svg_auto_rotation_selects_larger_fit():
     app = WebApplication()
 

@@ -18,6 +18,7 @@ from inspect import signature
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .calibration import create_calibration
 from .cli import convert_hpgl, ra_fill_spacings
 from .devices.mutoh_xp500 import MutohXP500
 from .hard_clip import drawable_area, get_hard_clip
@@ -235,6 +236,29 @@ class WebApplication:
             )
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def _enqueue_prepared(self, prepared: PreparedPlot) -> None:
+        with self.state.lock:
+            if len(self.state.queue) >= MAX_QUEUE_ITEMS:
+                raise RuntimeError("Die Warteschlange enthält bereits 20 Aufträge")
+            self.state.prepared[prepared.token] = prepared
+            self.state.queue.append(prepared.token)
+            self.state.message = f"{prepared.name} geprüft und bereit"
+        self.queue_store.append(asdict(prepared))
+        self.jobs.add(
+            {
+                "id": prepared.token,
+                "name": prepared.name,
+                "status": "prepared",
+                "created_at": datetime.now(UTC).isoformat(),
+                "started_at": None,
+                "finished_at": None,
+                "port": None,
+                "sent": 0,
+                "total": len(prepared.data),
+                "message": "Geprüft und bereit",
+            }
+        )
+
     def _prepare_hpgl(self, source: str, args, input_path: Path, preview_path: Path):
         input_path.write_text(source, encoding="utf-8")
         source_document = HPGLParser(args.source_unit, ra_fill_spacings(args)).parse_text(source)
@@ -360,25 +384,7 @@ class WebApplication:
             mapping_type=mapping_type,
             profile_pens=profile["pens"],
         )
-        with self.state.lock:
-            self.state.prepared[token] = prepared
-            self.state.queue.append(token)
-            self.state.message = f"{prepared.name} geprüft und bereit"
-        self.queue_store.append(asdict(prepared))
-        self.jobs.add(
-            {
-                "id": token,
-                "name": prepared.name,
-                "status": "prepared",
-                "created_at": datetime.now(UTC).isoformat(),
-                "started_at": None,
-                "finished_at": None,
-                "port": None,
-                "sent": 0,
-                "total": len(prepared.data),
-                "message": "Geprüft und bereit",
-            }
-        )
+        self._enqueue_prepared(prepared)
         paper = get_paper(args.paper, args.landscape)
         return {
             "token": token,
@@ -402,6 +408,74 @@ class WebApplication:
             "profile_name": prepared.profile_name,
             "mapping_type": prepared.mapping_type,
             "profile_pens": prepared.profile_pens,
+        }
+
+    def prepare_calibration(self, options: dict) -> dict:
+        paper_name = str(options.get("paper", "a3")).lower()
+        if paper_name not in {"a3", "a2", "a1", "a0"}:
+            raise ValueError("Unbekanntes Papierformat")
+        window = str(options.get("window", "norm"))
+        profile = get_hard_clip(window)
+        margin = float(options.get("margin", 5.0))
+        if not 0 <= margin <= 50:
+            raise ValueError("Der Sicherheitsrand muss zwischen 0 und 50 mm liegen")
+        buffer_profile = str(options.get("buffer_profile", "small"))
+        if buffer_profile not in BUFFER_PROFILES:
+            raise ValueError("Unbekanntes Pufferprofil")
+        pen_profile = self.profiles.get(str(options.get("profile", "")) or None)
+        paper = get_paper(paper_name)
+        hard = drawable_area(paper, profile, 0)
+        safe = drawable_area(paper, profile, margin)
+        document = create_calibration(paper_name, window, margin)
+        for polyline in document.polylines:
+            polyline.source_color = pen_profile["pens"][str(polyline.pen)]["color"]
+        base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        correction = hard_clip_center_correction(profile)
+        transform = CoordinateTransform(
+            base.a,
+            base.b,
+            base.c,
+            base.d,
+            base.tx + correction.first_mm,
+            base.ty + correction.second_mm,
+        )
+        output = HPGLWriter(
+            MutohXP500(unit_mm=0.01),
+            transform,
+            max_command_chars=BUFFER_PROFILES[buffer_profile].hpgl_command_chars,
+        ).write(document)
+        with tempfile.TemporaryDirectory(prefix="mutohplot-calibration-") as directory:
+            preview_path = Path(directory) / "preview.svg"
+            write_preview(document, preview_path, paper=paper, hard_clip=hard, safe_area=safe)
+            preview_svg = preview_path.read_text(encoding="utf-8")
+        token = uuid.uuid4().hex
+        prepared = PreparedPlot(
+            token=token,
+            name=f"Kalibrierung_{paper_name.upper()}_{window}.hpgl",
+            data=output.encode("ascii"),
+            source_bytes=len(output.encode("ascii")),
+            preview_svg=preview_svg,
+            polylines=len(document.polylines),
+            drawing_mm=document.drawing_distance_mm(),
+            pen_up_mm=document.pen_up_distance_mm(),
+            bounds=document.bounds(),
+            rotation=0,
+            scale=None,
+            source_type="Kalibrierung",
+            pens={"1": 1, "2": 2, "3": 3},
+            warnings=[],
+            profile_name=pen_profile["name"],
+            mapping_type="hpgl-pen",
+            profile_pens=pen_profile["pens"],
+        )
+        self._enqueue_prepared(prepared)
+        return {
+            "token": token,
+            "name": prepared.name,
+            "preview_url": f"/api/preview/{token}",
+            "paper": paper_name,
+            "window": window,
+            "margin": margin,
         }
 
     def queue_snapshot(self) -> list[dict]:
@@ -701,6 +775,8 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
                     dict(payload.get("options", {})),
                 )
                 self._json(result)
+            elif path == "/api/calibration":
+                self._json(self.app.prepare_calibration(payload), HTTPStatus.CREATED)
             elif path == "/api/plot":
                 self.app.start(
                     str(payload.get("token", "")),
@@ -797,7 +873,7 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
-<button id="check">Datei prüfen und anzeigen</button><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
+<button id="check">Datei prüfen und anzeigen</button><details><summary>Kalibrierung vorbereiten</summary><label>Hard-Clip-Modus</label><select id="calwindow"><option value="norm">Norm</option><option value="exp">Exp</option><option value="type1">Type 1</option><option value="type3">Type 3</option></select><button id="calibrate">Kalibrierungszeichnung erzeugen</button><small>Verwendet Papierformat, Sicherheitsrand und Stiftprofil von oben.</small></details><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
 <label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
 <div class="plot-actions"><button id="plot" disabled>Plot starten</button><button id="abort" class="danger" hidden>Abbruch</button></div><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
@@ -819,6 +895,7 @@ async function loadQueue(){if(queueBusy)return;try{const data=await api('/api/qu
 async function status(){try{const s=await api('/api/status');$('version').textContent=`v${s.version}`;plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
 function requestPreview(){if(!$('file').files[0])return;token=null;plotStarted=false;renderPlotControls();if(previewBusy){previewQueued=true;localMessage='Einstellung geändert · Vorschau wird anschließend neu berechnet';$('status').textContent=localMessage;return}$('check').click()}
 $('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}previewBusy=true;$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;const isSvg=f.name.toLowerCase().endsWith('.svg'),options={profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap};try{const j=await api('/api/preview',{name:f.name,source:await f.text(),options});if(previewQueued)return;token=j.token;plotStarted=false;renderPlotControls();renderPlotInfo(j);$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=j.paper.toUpperCase()+(j.landscape?' quer':' hoch')+` · ${j.paper_width_mm} × ${j.paper_height_mm} mm`;const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${options.fit?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){if(!previewQueued){token=null;renderPlotControls();localMessage=e.message;$('status').textContent=localMessage}}finally{previewBusy=false;$('check').disabled=false;if(previewQueued){previewQueued=false;requestPreview()}}}
+$('calibrate').onclick=async()=>{try{$('calibrate').disabled=true;const j=await api('/api/calibration',{paper:$('paper').value,window:$('calwindow').value,margin:+$('margin').value,profile:$('profile').value,buffer_profile:$('buffer').value});token=j.token;plotStarted=false;renderPlotControls();$('preview').innerHTML=`<img src="${j.preview_url}" alt="Kalibrierungsvorschau">`;localMessage=`${j.name} geprüft und in Warteschlange`;$('status').textContent=localMessage;await loadQueue();await loadJobs()}catch(e){$('status').textContent=e.message}finally{$('calibrate').disabled=false}}
 $('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';requestPreview()};
 $('paper').onchange=requestPreview;
 $('landscape').onchange=requestPreview;

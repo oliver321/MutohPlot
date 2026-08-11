@@ -56,6 +56,7 @@ def test_prepare_keeps_multiple_jobs_in_queue():
     assert app.queue_snapshot()[0]["position"] == 1
     assert app.queue_snapshot()[0]["plot_width_mm"] > 0
     assert app.queue_snapshot()[0]["plot_height_mm"] > 0
+    assert app.queue_snapshot()[0]["source_bytes"] == len(SIMPLE_HPGL.encode("utf-8"))
 
 
 def test_queue_can_be_reordered_and_removed():
@@ -388,6 +389,14 @@ def test_plot_can_be_cancelled_while_paused():
     snapshot = app.state.snapshot()
     assert snapshot["status"] == "cancelled"
     assert "RESET" in snapshot["message"]
+    assert app.queue_snapshot()[0]["status"] == "cancelled"
+    restarted = WebApplication()
+    assert restarted.queue_snapshot()[0]["status"] == "cancelled"
+    token = prepared["token"]
+    with pytest.raises(RuntimeError, match="entfernen"):
+        app.start(token, "/dev/ttyUSB0", "small")
+    app.change_queue(token, "remove")
+    assert app.queue_snapshot() == []
 
 
 def test_conversion_options_preserve_a3_and_calibration_defaults():

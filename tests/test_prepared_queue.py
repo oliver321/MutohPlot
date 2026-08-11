@@ -13,10 +13,12 @@ def test_queue_persists_payload_and_order(tmp_path):
     queue.append(item("one"))
     queue.append(item("two"))
     queue.reorder(["two", "one"])
+    queue.update("two", queue_status="cancelled")
 
     restored = PreparedQueueStore(path)
     assert [entry["token"] for entry in restored.snapshot()] == ["two", "one"]
     assert restored.snapshot()[0]["data"] == b"IN;"
+    assert restored.snapshot()[0]["queue_status"] == "cancelled"
 
     restored.remove("two")
     assert [entry["token"] for entry in PreparedQueueStore(path).snapshot()] == ["one"]

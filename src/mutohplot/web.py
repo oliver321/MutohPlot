@@ -62,6 +62,7 @@ class PreparedPlot:
     token: str
     name: str
     data: bytes
+    source_bytes: int
     preview_svg: str
     polylines: int
     drawing_mm: float
@@ -75,6 +76,7 @@ class PreparedPlot:
     profile_name: str
     mapping_type: str
     profile_pens: dict[str, dict]
+    queue_status: str = "prepared"
 
 
 class PlotState:
@@ -201,6 +203,8 @@ class WebApplication:
         self.jobs = job_history or JobHistory()
         self.queue_store = queue_store or PreparedQueueStore()
         for stored in self.queue_store.snapshot():
+            stored.setdefault("source_bytes", len(stored["data"]))
+            stored.setdefault("queue_status", "prepared")
             if stored.get("bounds") is not None:
                 stored["bounds"] = tuple(stored["bounds"])
             prepared = PreparedPlot(**stored)
@@ -341,6 +345,7 @@ class WebApplication:
             token=token,
             name=Path(name or "zeichnung.hpgl").name,
             data=output.encode("ascii"),
+            source_bytes=len(source.encode("utf-8")),
             preview_svg=preview_svg,
             polylines=len(document.polylines),
             drawing_mm=document.drawing_distance_mm(),
@@ -386,6 +391,7 @@ class WebApplication:
             "rotation": prepared.rotation,
             "scale": prepared.scale,
             "bytes": len(prepared.data),
+            "source_bytes": prepared.source_bytes,
             "source_type": prepared.source_type,
             "paper": args.paper,
             "landscape": args.landscape,
@@ -414,10 +420,11 @@ class WebApplication:
                         "position": position,
                         "name": prepared.name,
                         "bytes": len(prepared.data),
+                        "source_bytes": prepared.source_bytes,
                         "plot_width_mm": round(bounds[2] - bounds[0], 1) if bounds else None,
                         "plot_height_mm": round(bounds[3] - bounds[1], 1) if bounds else None,
                         "profile_name": prepared.profile_name,
-                        "status": active_status if token == active_id else "prepared",
+                        "status": active_status if token == active_id else prepared.queue_status,
                     }
                 )
             return result
@@ -477,6 +484,8 @@ class WebApplication:
                 raise ValueError("Die Vorschau ist nicht mehr aktuell; bitte erneut prüfen")
             if token not in self.state.queue:
                 raise ValueError("Der Auftrag ist nicht mehr in der Warteschlange")
+            if prepared.queue_status != "prepared":
+                raise RuntimeError("Abgebrochene oder fehlerhafte Aufträge bitte zuerst entfernen")
             self.state.status = "sending"
             self.state.sent = 0
             self.state.total = len(prepared.data)
@@ -563,11 +572,16 @@ class WebApplication:
                     total=final_total,
                     finished_at=finished_at,
                 )
-                with self.state.lock:
-                    if token in self.state.queue:
-                        self.state.queue.remove(token)
-                    self.state.prepared.pop(token, None)
-                self.queue_store.remove(token)
+                if final_status == "complete":
+                    with self.state.lock:
+                        if token in self.state.queue:
+                            self.state.queue.remove(token)
+                        self.state.prepared.pop(token, None)
+                    self.queue_store.remove(token)
+                else:
+                    with self.state.lock:
+                        prepared.queue_status = final_status
+                    self.queue_store.update(token, queue_status=final_status)
                 self.state.transmission_done.set()
 
         threading.Thread(target=transmit, name="mutohplot-send", daemon=False).start()
@@ -799,7 +813,7 @@ function renderPenMap(){const box=$('penmap');box.replaceChildren();const entrie
 function renderPlotControls(){const active=['sending','waiting_xon','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':['sending','waiting_xon'].includes(plotStatus)?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
 function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`;$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
 async function loadJobs(){try{const data=await api('/api/jobs'),box=$('jobs');box.replaceChildren();if(!data.jobs.length){box.textContent='Noch keine Aufträge';return}for(const j of data.jobs.slice(0,10)){const row=document.createElement('div');row.className='job';const name=document.createElement('strong');name.textContent=j.name;const state=document.createElement('span');state.className=j.status;state.textContent=j.status;const progress=document.createElement('span');progress.textContent=j.total?`${Math.round(j.sent*100/j.total)} %`:'–';const time=document.createElement('span');time.textContent=new Date(j.started_at||j.created_at).toLocaleString('de-DE');row.append(name,state,progress,time);box.append(row)}}catch(e){$('jobs').textContent=e.message}}
-function renderQueue(items){const box=$('queue');box.replaceChildren();if(!items.length){box.textContent='Keine vorbereiteten Aufträge';return}for(const [index,item] of items.entries()){const row=document.createElement('div');row.className='queue-item';const name=document.createElement('strong');name.textContent=`${item.position}. ${item.name}`;const profile=document.createElement('span');profile.textContent=item.profile_name;const size=document.createElement('span');size.textContent=item.plot_width_mm==null?'–':`${String(item.plot_width_mm).replace('.',',')} × ${String(item.plot_height_mm).replace('.',',')} mm`;const actions=document.createElement('div');actions.className='queue-actions';for(const [action,label] of [['up','↑ Nach oben'],['down','↓ Nach unten'],['remove','Entfernen'],['start','Plotten']]){const button=document.createElement('button');button.textContent=label;if(action==='remove')button.className='remove';button.disabled=queueBusy||item.status!=='prepared'||(action==='up'&&index===0)||(action==='down'&&index===items.length-1);button.onclick=()=>queueAction(item,action).catch(e=>{$('status').textContent=e.message});actions.append(button)}row.append(name,profile,size,actions);box.append(row)}}
+function renderQueue(items){const box=$('queue');box.replaceChildren();if(!items.length){box.textContent='Keine vorbereiteten Aufträge';return}const humanBytes=n=>n<1024?`${n} B`:n<1024*1024?`${(n/1024).toFixed(1).replace('.',',')} KB`:`${(n/1024/1024).toFixed(1).replace('.',',')} MB`;for(const [index,item] of items.entries()){const row=document.createElement('div');row.className='queue-item';const name=document.createElement('strong');name.textContent=`${item.position}. ${item.name}`;const profile=document.createElement('span');profile.textContent=`${item.profile_name} · ${item.status}`;const size=document.createElement('span');const plotSize=item.plot_width_mm==null?'–':`${String(item.plot_width_mm).replace('.',',')} × ${String(item.plot_height_mm).replace('.',',')} mm`;size.textContent=`${plotSize} · Datei ${humanBytes(item.source_bytes)}`;const actions=document.createElement('div');actions.className='queue-actions';const active=['sending','waiting_xon','paused','cancelling'].includes(item.status);for(const [action,label] of [['up','↑ Nach oben'],['down','↓ Nach unten'],['remove','Entfernen'],['start','Plotten']]){const button=document.createElement('button');button.textContent=label;if(action==='remove')button.className='remove';button.disabled=queueBusy||active||(action==='start'&&item.status!=='prepared')||(action==='up'&&index===0)||(action==='down'&&index===items.length-1);button.onclick=()=>queueAction(item,action).catch(e=>{$('status').textContent=e.message});actions.append(button)}row.append(name,profile,size,actions);box.append(row)}}
 async function queueAction(item,action){if(queueBusy)return;queueBusy=true;try{if(action==='start'){if(!confirm(`Plot ${item.name} jetzt starten? Der Plotter beginnt sich zu bewegen.`))return;await api('/api/plot',{token:item.token,port:$('port').value,buffer_profile:$('buffer').value});token=item.token;plotStarted=true;plotStatus='sending';renderPlotControls();queueBusy=false;await loadQueue()}else{const data=await api('/api/queue/control',{token:item.token,action});queueBusy=false;renderQueue(data.queue);localMessage=action==='remove'?`${item.name} entfernt`:'Reihenfolge gespeichert';$('status').textContent=localMessage}await loadJobs()}finally{queueBusy=false}}
 async function loadQueue(){if(queueBusy)return;try{const data=await api('/api/queue');renderQueue(data.queue)}catch(e){$('queue').textContent=e.message}}
 async function status(){try{const s=await api('/api/status');$('version').textContent=`v${s.version}`;plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}

@@ -65,6 +65,15 @@ class PreparedQueueStore:
             self._items = [item for item in self._items if item.get("token") != token]
             self._save()
 
+    def update(self, token: str, **changes) -> None:
+        with self.lock:
+            for item in self._items:
+                if item.get("token") == token:
+                    item.update(changes)
+                    self._save()
+                    return
+        raise KeyError(token)
+
     def reorder(self, tokens: list[str]) -> None:
         with self.lock:
             by_token = {item["token"]: item for item in self._items}

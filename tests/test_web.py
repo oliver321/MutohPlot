@@ -17,6 +17,9 @@ SIMPLE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50
 def isolated_job_history(monkeypatch, tmp_path):
     monkeypatch.setenv("MUTOHPLOT_JOB_HISTORY", str(tmp_path / "default-jobs.json"))
     monkeypatch.setenv("MUTOHPLOT_PREPARED_QUEUE", str(tmp_path / "default-queue.json"))
+    monkeypatch.setenv(
+        "MUTOHPLOT_CALIBRATION_PROFILES", str(tmp_path / "calibration-profiles.json")
+    )
 
 
 def test_status_exposes_installed_version():
@@ -124,6 +127,9 @@ def test_prepare_calibration_adds_preview_to_queue():
         assert f'id="{field}"' in PAGE
     assert "Messwerte berechnen" in PAGE
     assert "Gemessene Zeichenfläche" in PAGE
+    assert 'id="calprofilename"' in PAGE
+    assert "Profil speichern" in PAGE
+    assert "noch nicht aktiv" in PAGE
 
 
 def test_prepare_svg_auto_rotation_selects_larger_fit():

@@ -126,7 +126,9 @@ def test_prepare_calibration_adds_preview_to_queue():
     for field in ("caltop", "calbottom", "calleft", "calright"):
         assert f'id="{field}"' in PAGE
     assert "Messwerte berechnen" in PAGE
-    assert "Gemessene Zeichenfläche" in PAGE
+    assert "Vom Plotter gemessenes Blatt" in PAGE
+    assert 'id="calpaperwidth"' in PAGE
+    assert 'id="calpaperheight"' in PAGE
     assert 'id="calprofilename"' in PAGE
     assert "Profil speichern" in PAGE
     assert "noch nicht aktiv" in PAGE
@@ -188,7 +190,8 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
 def test_web_queues_changed_options_during_active_preview():
     assert "if(previewBusy){previewQueued=true" in PAGE
     assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
-    assert "$('paper').onchange=requestPreview" in PAGE
+    assert "$('paper').onchange=()=>" in PAGE
+    assert "requestPreview()" in PAGE
     assert "const format=j.paper.toUpperCase()" in PAGE
 
 

@@ -34,14 +34,28 @@ def validate_calibration_profile(profile: dict) -> dict:
             raise ValueError(f"Messwert {field} muss zwischen 0 und 200 mm liegen")
         values[field] = value
     dimensions = get_paper(paper)
-    drawable_width = dimensions.width_mm - values["left_mm"] - values["right_mm"]
-    drawable_height = dimensions.height_mm - values["top_mm"] - values["bottom_mm"]
+    paper_values = {}
+    for field, default in (
+        ("paper_width_mm", dimensions.width_mm),
+        ("paper_height_mm", dimensions.height_mm),
+    ):
+        raw = profile.get(field, default)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Papiermaß {field} ist ungültig") from error
+        if not 1 <= value <= 5000:
+            raise ValueError(f"Papiermaß {field} muss zwischen 1 und 5000 mm liegen")
+        paper_values[field] = value
+    drawable_width = paper_values["paper_width_mm"] - values["left_mm"] - values["right_mm"]
+    drawable_height = paper_values["paper_height_mm"] - values["top_mm"] - values["bottom_mm"]
     if drawable_width <= 0 or drawable_height <= 0:
         raise ValueError("Die Messwerte ergeben keine gültige Zeichenfläche")
     return {
         "name": name,
         "paper": paper,
         "window": window,
+        **paper_values,
         **values,
         "drawable_width_mm": round(drawable_width, 2),
         "drawable_height_mm": round(drawable_height, 2),

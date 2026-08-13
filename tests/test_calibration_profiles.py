@@ -28,6 +28,33 @@ def test_profile_is_calculated_saved_and_reloaded(tmp_path):
     assert CalibrationProfileStore(path).snapshot()[saved["name"]] == saved
 
 
+def test_profile_supports_measured_intermediate_paper_size(tmp_path):
+    store = CalibrationProfileStore(tmp_path / "calibrations.json")
+
+    saved = store.put(
+        PROFILE
+        | {
+            "name": "Zwischenformat",
+            "paper_width_mm": 350,
+            "paper_height_mm": 500,
+        }
+    )
+
+    assert saved["paper_width_mm"] == 350
+    assert saved["paper_height_mm"] == 500
+    assert saved["drawable_width_mm"] == 320
+    assert saved["drawable_height_mm"] == 450
+
+
+def test_old_profile_without_measured_paper_size_uses_nominal_dimensions(tmp_path):
+    store = CalibrationProfileStore(tmp_path / "calibrations.json")
+
+    saved = store.put(PROFILE)
+
+    assert saved["paper_width_mm"] == 297
+    assert saved["paper_height_mm"] == 420
+
+
 def test_profile_can_be_deleted(tmp_path):
     store = CalibrationProfileStore(tmp_path / "calibrations.json")
     store.put(PROFILE)
@@ -42,6 +69,9 @@ def test_invalid_measurements_are_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="Messwert"):
         store.put(PROFILE | {"top_mm": -1})
+
+    with pytest.raises(ValueError, match="Papiermaß"):
+        store.put(PROFILE | {"paper_width_mm": 0})
 
 
 def test_invalid_persisted_file_is_rejected(tmp_path):

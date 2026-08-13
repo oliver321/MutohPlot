@@ -28,6 +28,7 @@ def test_status_exposes_installed_version():
     assert snapshot["version"]
     assert 'id="version"' in PAGE
     assert "s.version" in PAGE
+    assert "/ttyUSB|ttyACM/" in PAGE
 
 
 def test_prepare_returns_a3_preview_and_plot_token(tmp_path):

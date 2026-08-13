@@ -131,6 +131,28 @@ def test_prepare_calibration_adds_preview_to_queue():
     assert 'id="calpaperheight"' in PAGE
     assert 'id="calmeasure"' in PAGE
     assert "/api/calibration/measure" in PAGE
+
+
+def test_prepare_calibration_aligns_to_measured_plotter_area():
+    app = WebApplication()
+
+    result = app.prepare_calibration(
+        {
+            "paper": "a3",
+            "window": "norm",
+            "margin": 5,
+            "measured_width_mm": 565.2,
+            "measured_height_mm": 407.59,
+        }
+    )
+
+    assert result["measured"] is True
+    assert result["paper_width_mm"] == 565.2
+    assert result["paper_height_mm"] == 407.59
+    assert result["name"] == "Kalibrierung_gemessen_565.2x407.59.hpgl"
+    prepared = app.state.prepared[result["token"]]
+    assert prepared.bounds == (0, 0, 565.2, 407.59)
+    assert 'width="565.2mm"' in prepared.preview_svg
     assert 'id="calprofilename"' in PAGE
     assert "Profil speichern" in PAGE
     assert "noch nicht aktiv" in PAGE

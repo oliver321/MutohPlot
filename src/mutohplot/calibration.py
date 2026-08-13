@@ -3,8 +3,8 @@ from math import cos, pi, sin
 from .document import PlotDocument
 from .geometry.point import Point
 from .geometry.polyline import Polyline
-from .hard_clip import drawable_area, get_hard_clip
-from .paper import get_paper
+from .hard_clip import HardClipProfile, drawable_area, get_hard_clip
+from .paper import Paper, get_paper
 
 
 def _line(doc: PlotDocument, x1: float, y1: float, x2: float, y2: float, pen: int = 1):
@@ -39,6 +39,25 @@ def create_calibration(
 ) -> PlotDocument:
     paper = get_paper(paper_name)
     profile = get_hard_clip(window)
+    return _create_calibration(paper, profile, margin_mm)
+
+
+def create_measured_calibration(
+    width_mm: float, height_mm: float, margin_mm: float = 0.0
+) -> PlotDocument:
+    """Create a sheet aligned to the hard-clip area reported by the plotter."""
+    if width_mm <= 0 or height_mm <= 0:
+        raise ValueError("Measured hard-clip dimensions must be positive")
+    return _create_calibration(
+        Paper("XP-500 measured", width_mm, height_mm),
+        HardClipProfile("Measured", 0.0, 0.0, 0.0, 0.0),
+        margin_mm,
+    )
+
+
+def _create_calibration(
+    paper: Paper, profile: HardClipProfile, margin_mm: float
+) -> PlotDocument:
     hard = drawable_area(paper, profile, 0.0)
     safe = drawable_area(paper, profile, margin_mm)
 
@@ -86,8 +105,8 @@ def create_calibration(
         (hard.x_min_mm, hard.y_max_mm),
         (hard.x_max_mm, hard.y_max_mm),
     ]:
-        _line(doc, px - tick, py, px + tick, py, pen=2)
-        _line(doc, px, py - tick, px, py + tick, pen=2)
+        _line(doc, max(0, px - tick), py, min(paper.width_mm, px + tick), py, pen=2)
+        _line(doc, px, max(0, py - tick), px, min(paper.height_mm, py + tick), pen=2)
 
     _line(doc, hcx - tick, hard.y_min_mm, hcx + tick, hard.y_min_mm, pen=2)
     _line(doc, hcx - tick, hard.y_max_mm, hcx + tick, hard.y_max_mm, pen=2)

@@ -129,6 +129,8 @@ def test_prepare_calibration_adds_preview_to_queue():
     assert "Vom Plotter gemessenes Blatt" in PAGE
     assert 'id="calpaperwidth"' in PAGE
     assert 'id="calpaperheight"' in PAGE
+    assert 'id="calmeasure"' in PAGE
+    assert "/api/calibration/measure" in PAGE
     assert 'id="calprofilename"' in PAGE
     assert "Profil speichern" in PAGE
     assert "noch nicht aktiv" in PAGE

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
@@ -99,6 +100,64 @@ def serial_status(settings):
             "cd": bool(connection.cd),
             "ri": bool(connection.ri),
         }
+    finally:
+        connection.close()
+
+
+def _read_plotter_response(connection, timeout_s: float, command: str) -> str:
+    deadline = monotonic() + timeout_s
+    data = bytearray()
+    while monotonic() < deadline:
+        chunk = connection.read(connection.in_waiting or 1)
+        if chunk:
+            data.extend(chunk)
+            if b"\r" in data or b"\n" in data:
+                break
+    if not data:
+        raise SerialTransmissionError(f"Der Plotter hat nicht auf {command} geantwortet")
+    try:
+        return bytes(data).decode("ascii").strip()
+    except UnicodeDecodeError as error:
+        raise SerialTransmissionError("Der Plotter hat eine ungültige Antwort gesendet") from error
+
+
+def query_hard_clip(settings, timeout_s: float = 5.0, connection_factory=None) -> dict:
+    """Read output factors and current hard-clip limits without moving the plotter."""
+    connection = (connection_factory or open_serial)(settings)
+    try:
+        connection.reset_input_buffer()
+        connection.write(b"OF;")
+        connection.flush()
+        factors = _read_plotter_response(connection, timeout_s, "OF;")
+        connection.reset_input_buffer()
+        connection.write(b"OH;")
+        connection.flush()
+        limits = _read_plotter_response(connection, timeout_s, "OH;")
+        try:
+            factor_x, factor_y = [float(value) for value in re.split(r"\s*,\s*", factors)]
+            x_min, y_min, x_max, y_max = [float(value) for value in re.split(r"\s*,\s*", limits)]
+        except (TypeError, ValueError) as error:
+            raise SerialTransmissionError(
+                f"Unerwartete Plotterantwort: OF={factors!r}, OH={limits!r}"
+            ) from error
+        if factor_x <= 0 or factor_y <= 0 or x_max <= x_min or y_max <= y_min:
+            raise SerialTransmissionError(
+                f"Ungültige Plottergrenzen: OF={factors!r}, OH={limits!r}"
+            )
+        return {
+            # XP-500 axis 1 follows media feed (length); axis 2 is paper width.
+            "width_mm": round((y_max - y_min) / factor_y, 2),
+            "height_mm": round((x_max - x_min) / factor_x, 2),
+            "factor_x": factor_x,
+            "factor_y": factor_y,
+            "limits": [x_min, y_min, x_max, y_max],
+        }
+    except SerialTransmissionError as error:
+        raise SerialTransmissionError(f"Plotterabfrage auf {settings.port}: {error}") from error
+    except (OSError, TimeoutError) as error:
+        raise SerialTransmissionError(
+            f"Plotterabfrage auf {settings.port} fehlgeschlagen: {error}"
+        ) from error
     finally:
         connection.close()
 

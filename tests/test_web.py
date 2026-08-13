@@ -17,6 +17,9 @@ SIMPLE_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50
 def isolated_job_history(monkeypatch, tmp_path):
     monkeypatch.setenv("MUTOHPLOT_JOB_HISTORY", str(tmp_path / "default-jobs.json"))
     monkeypatch.setenv("MUTOHPLOT_PREPARED_QUEUE", str(tmp_path / "default-queue.json"))
+    monkeypatch.setenv(
+        "MUTOHPLOT_CALIBRATION_PROFILES", str(tmp_path / "calibration-profiles.json")
+    )
 
 
 def test_status_exposes_installed_version():
@@ -25,6 +28,7 @@ def test_status_exposes_installed_version():
     assert snapshot["version"]
     assert 'id="version"' in PAGE
     assert "s.version" in PAGE
+    assert "/ttyUSB|ttyACM/" in PAGE
 
 
 def test_prepare_returns_a3_preview_and_plot_token(tmp_path):
@@ -108,6 +112,53 @@ def test_prepare_svg_with_default_path_optimization():
     assert result["polylines"] == 1
 
 
+def test_prepare_calibration_adds_preview_to_queue():
+    app = WebApplication()
+
+    result = app.prepare_calibration({"paper": "a2", "window": "norm", "margin": 5})
+
+    assert result["paper"] == "a2"
+    assert result["name"] == "Kalibrierung_A2_norm.hpgl"
+    assert app.queue_snapshot()[0]["name"] == result["name"]
+    prepared = app.state.prepared[result["token"]]
+    assert prepared.data.startswith(b"IN;")
+    assert "<svg" in prepared.preview_svg
+    assert "Kalibrierungszeichnung erzeugen" in PAGE
+    for field in ("caltop", "calbottom", "calleft", "calright"):
+        assert f'id="{field}"' in PAGE
+    assert "Messwerte berechnen" in PAGE
+    assert "Vom Plotter gemessenes Blatt" in PAGE
+    assert 'id="calpaperwidth"' in PAGE
+    assert 'id="calpaperheight"' in PAGE
+    assert 'id="calmeasure"' in PAGE
+    assert "/api/calibration/measure" in PAGE
+
+
+def test_prepare_calibration_aligns_to_measured_plotter_area():
+    app = WebApplication()
+
+    result = app.prepare_calibration(
+        {
+            "paper": "a3",
+            "window": "norm",
+            "margin": 5,
+            "measured_width_mm": 565.2,
+            "measured_height_mm": 407.59,
+        }
+    )
+
+    assert result["measured"] is True
+    assert result["paper_width_mm"] == 565.2
+    assert result["paper_height_mm"] == 407.59
+    assert result["name"] == "Kalibrierung_gemessen_565.2x407.59.hpgl"
+    prepared = app.state.prepared[result["token"]]
+    assert prepared.bounds == (0, 0, 565.2, 407.59)
+    assert 'width="565.2mm"' in prepared.preview_svg
+    assert 'id="calprofilename"' in PAGE
+    assert "Profil speichern" in PAGE
+    assert "noch nicht aktiv" in PAGE
+
+
 def test_prepare_svg_auto_rotation_selects_larger_fit():
     app = WebApplication()
 
@@ -161,10 +212,40 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
     assert result["paper_height_mm"] == height
 
 
+def test_active_calibration_controls_measured_paper_and_preview():
+    app = WebApplication()
+    app.calibrations.put(
+        {
+            "name": "Zwischenformat",
+            "paper": "a3",
+            "window": "type3",
+            "paper_width_mm": 350,
+            "paper_height_mm": 500,
+            "top_mm": 30,
+            "bottom_mm": 10,
+            "left_mm": 12,
+            "right_mm": 8,
+        }
+    )
+    app.calibrations.activate("Zwischenformat")
+
+    result = app.prepare("zeichnung.svg", SIMPLE_SVG, {"paper": "a0", "optimize": False})
+
+    assert result["paper"] == "Zwischenformat"
+    assert result["paper_width_mm"] == 350
+    assert result["paper_height_mm"] == 500
+    assert result["landscape"] is False
+    assert result["calibration_profile"] == "Zwischenformat"
+    preview = app.state.prepared[result["token"]].preview_svg
+    assert 'width="350.0mm"' in preview
+    assert 'height="500.0mm"' in preview
+
+
 def test_web_queues_changed_options_during_active_preview():
     assert "if(previewBusy){previewQueued=true" in PAGE
     assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
-    assert "$('paper').onchange=requestPreview" in PAGE
+    assert "$('paper').onchange=()=>" in PAGE
+    assert "requestPreview()" in PAGE
     assert "const format=j.paper.toUpperCase()" in PAGE
 
 

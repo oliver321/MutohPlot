@@ -28,6 +28,10 @@ mkdir -p "$RELEASES_DIR" "$BACKUP_DIR"
 if [[ -f "$HOME/.config/mutohplot/web-pens.json" ]]; then
     cp "$HOME/.config/mutohplot/web-pens.json" "$BACKUP_DIR/web-pens-${STAMP}.json"
 fi
+if [[ -f "$HOME/.config/mutohplot/calibration-profiles.json" ]]; then
+    cp "$HOME/.config/mutohplot/calibration-profiles.json" \
+        "$BACKUP_DIR/calibration-profiles-${STAMP}.json"
+fi
 if [[ -f "$APP_HOME/jobs.json" ]]; then
     cp "$APP_HOME/jobs.json" "$BACKUP_DIR/jobs-${STAMP}.json"
 fi

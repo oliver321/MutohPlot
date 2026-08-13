@@ -18,15 +18,17 @@ from inspect import signature
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .calibration import create_calibration, create_measured_calibration
+from .calibration_profiles import CalibrationProfileStore
 from .cli import convert_hpgl, ra_fill_spacings
 from .devices.mutoh_xp500 import MutohXP500
-from .hard_clip import drawable_area, get_hard_clip
+from .hard_clip import HardClipProfile, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .job_history import JobHistory
 from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
-from .paper import get_paper
+from .paper import Paper, get_paper
 from .prepared_queue import PreparedQueueStore
 from .report import check_bounds
 from .serial_io import (
@@ -34,6 +36,7 @@ from .serial_io import (
     SerialSettings,
     SerialTransmissionCancelled,
     list_serial_ports,
+    query_hard_clip,
     send_bytes,
 )
 from .svg.preview import write_preview
@@ -195,13 +198,19 @@ def _conversion_args(options: dict) -> argparse.Namespace:
 
 class WebApplication:
     def __init__(
-        self, sender: Callable = send_bytes, profile_store=None, job_history=None, queue_store=None
+        self,
+        sender: Callable = send_bytes,
+        profile_store=None,
+        job_history=None,
+        queue_store=None,
+        calibration_store=None,
     ) -> None:
         self.state = PlotState()
         self.sender = sender
         self.profiles = profile_store or PenProfileStore()
         self.jobs = job_history or JobHistory()
         self.queue_store = queue_store or PreparedQueueStore()
+        self.calibrations = calibration_store or CalibrationProfileStore()
         for stored in self.queue_store.snapshot():
             stored.setdefault("source_bytes", len(stored["data"]))
             stored.setdefault("queue_status", "prepared")
@@ -235,6 +244,29 @@ class WebApplication:
             )
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def _enqueue_prepared(self, prepared: PreparedPlot) -> None:
+        with self.state.lock:
+            if len(self.state.queue) >= MAX_QUEUE_ITEMS:
+                raise RuntimeError("Die Warteschlange enthält bereits 20 Aufträge")
+            self.state.prepared[prepared.token] = prepared
+            self.state.queue.append(prepared.token)
+            self.state.message = f"{prepared.name} geprüft und bereit"
+        self.queue_store.append(asdict(prepared))
+        self.jobs.add(
+            {
+                "id": prepared.token,
+                "name": prepared.name,
+                "status": "prepared",
+                "created_at": datetime.now(UTC).isoformat(),
+                "started_at": None,
+                "finished_at": None,
+                "port": None,
+                "sent": 0,
+                "total": len(prepared.data),
+                "message": "Geprüft und bereit",
+            }
+        )
+
     def _prepare_hpgl(self, source: str, args, input_path: Path, preview_path: Path):
         input_path.write_text(source, encoding="utf-8")
         source_document = HPGLParser(args.source_unit, ra_fill_spacings(args)).parse_text(source)
@@ -254,10 +286,21 @@ class WebApplication:
         unsupported = sorted(set(document.metadata.get("unsupported_svg_elements", [])))
         for polyline in document.polylines:
             polyline.source_color = profile["pens"][str(polyline.pen)]["color"]
-        paper = get_paper(args.paper, args.landscape)
-        profile = get_hard_clip("norm")
-        hard = drawable_area(paper, profile, 0)
-        safe = drawable_area(paper, profile, args.margin)
+        measured = getattr(args, "measured_calibration", None)
+        if measured:
+            paper = Paper(measured["name"], measured["paper_width_mm"], measured["paper_height_mm"])
+            hard_profile = HardClipProfile(
+                measured["name"],
+                measured["top_mm"],
+                measured["bottom_mm"],
+                measured["left_mm"],
+                measured["right_mm"],
+            )
+        else:
+            paper = get_paper(args.paper, args.landscape)
+            hard_profile = get_hard_clip("norm")
+        hard = drawable_area(paper, hard_profile, 0)
+        safe = drawable_area(paper, hard_profile, args.margin)
         rotation = 0
         fit_scale = None
         if args.fit:
@@ -285,7 +328,7 @@ class WebApplication:
         write_preview(document, preview_path, paper=paper, hard_clip=hard, safe_area=safe)
 
         base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
-        correction = hard_clip_center_correction(profile)
+        correction = hard_clip_center_correction(hard_profile)
         transform = CoordinateTransform(
             base.a,
             base.b,
@@ -315,6 +358,7 @@ class WebApplication:
         if len(source.encode("utf-8")) > MAX_UPLOAD_BYTES:
             raise ValueError("Die Plotdatei ist größer als 20 MB")
         args = _conversion_args(options)
+        args.measured_calibration = self.calibrations.active_profile()
         profile = self.profiles.get(str(options.get("profile", "")) or None)
         suffix = Path(name).suffix.lower()
         if suffix not in {".hpgl", ".plt", ".svg"}:
@@ -360,26 +404,15 @@ class WebApplication:
             mapping_type=mapping_type,
             profile_pens=profile["pens"],
         )
-        with self.state.lock:
-            self.state.prepared[token] = prepared
-            self.state.queue.append(token)
-            self.state.message = f"{prepared.name} geprüft und bereit"
-        self.queue_store.append(asdict(prepared))
-        self.jobs.add(
-            {
-                "id": token,
-                "name": prepared.name,
-                "status": "prepared",
-                "created_at": datetime.now(UTC).isoformat(),
-                "started_at": None,
-                "finished_at": None,
-                "port": None,
-                "sent": 0,
-                "total": len(prepared.data),
-                "message": "Geprüft und bereit",
-            }
-        )
-        paper = get_paper(args.paper, args.landscape)
+        self._enqueue_prepared(prepared)
+        if args.measured_calibration:
+            paper = Paper(
+                args.measured_calibration["name"],
+                args.measured_calibration["paper_width_mm"],
+                args.measured_calibration["paper_height_mm"],
+            )
+        else:
+            paper = get_paper(args.paper, args.landscape)
         return {
             "token": token,
             "name": prepared.name,
@@ -393,8 +426,8 @@ class WebApplication:
             "bytes": len(prepared.data),
             "source_bytes": prepared.source_bytes,
             "source_type": prepared.source_type,
-            "paper": args.paper,
-            "landscape": args.landscape,
+            "paper": paper.name if args.measured_calibration else args.paper,
+            "landscape": False if args.measured_calibration else args.landscape,
             "paper_width_mm": paper.width_mm,
             "paper_height_mm": paper.height_mm,
             "pens": prepared.pens,
@@ -402,6 +435,99 @@ class WebApplication:
             "profile_name": prepared.profile_name,
             "mapping_type": prepared.mapping_type,
             "profile_pens": prepared.profile_pens,
+            "calibration_profile": (
+                args.measured_calibration["name"] if args.measured_calibration else None
+            ),
+        }
+
+    def prepare_calibration(self, options: dict) -> dict:
+        paper_name = str(options.get("paper", "a3")).lower()
+        if paper_name not in {"a3", "a2", "a1", "a0"}:
+            raise ValueError("Unbekanntes Papierformat")
+        window = str(options.get("window", "norm"))
+        profile = get_hard_clip(window)
+        margin = float(options.get("margin", 5.0))
+        if not 0 <= margin <= 50:
+            raise ValueError("Der Sicherheitsrand muss zwischen 0 und 50 mm liegen")
+        buffer_profile = str(options.get("buffer_profile", "small"))
+        if buffer_profile not in BUFFER_PROFILES:
+            raise ValueError("Unbekanntes Pufferprofil")
+        pen_profile = self.profiles.get(str(options.get("profile", "")) or None)
+        measured_width = options.get("measured_width_mm")
+        measured_height = options.get("measured_height_mm")
+        measured = measured_width is not None or measured_height is not None
+        if measured:
+            try:
+                measured_width = float(measured_width)
+                measured_height = float(measured_height)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Ungültige gemessene Plotterfläche") from error
+            if not 1 <= measured_width <= 5000 or not 1 <= measured_height <= 5000:
+                raise ValueError("Gemessene Plotterfläche muss zwischen 1 und 5000 mm liegen")
+            paper = Paper("XP-500 gemessen", measured_width, measured_height)
+            profile = HardClipProfile("Gemessen", 0, 0, 0, 0)
+            document = create_measured_calibration(measured_width, measured_height, margin)
+        else:
+            paper = get_paper(paper_name)
+            document = create_calibration(paper_name, window, margin)
+        hard = drawable_area(paper, profile, 0)
+        safe = drawable_area(paper, profile, margin)
+        for polyline in document.polylines:
+            polyline.source_color = pen_profile["pens"][str(polyline.pen)]["color"]
+        base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
+        correction = hard_clip_center_correction(profile)
+        transform = CoordinateTransform(
+            base.a,
+            base.b,
+            base.c,
+            base.d,
+            base.tx + correction.first_mm,
+            base.ty + correction.second_mm,
+        )
+        output = HPGLWriter(
+            MutohXP500(unit_mm=0.01),
+            transform,
+            max_command_chars=BUFFER_PROFILES[buffer_profile].hpgl_command_chars,
+        ).write(document)
+        with tempfile.TemporaryDirectory(prefix="mutohplot-calibration-") as directory:
+            preview_path = Path(directory) / "preview.svg"
+            write_preview(document, preview_path, paper=paper, hard_clip=hard, safe_area=safe)
+            preview_svg = preview_path.read_text(encoding="utf-8")
+        token = uuid.uuid4().hex
+        prepared = PreparedPlot(
+            token=token,
+            name=(
+                f"Kalibrierung_gemessen_{measured_width:g}x{measured_height:g}.hpgl"
+                if measured
+                else f"Kalibrierung_{paper_name.upper()}_{window}.hpgl"
+            ),
+            data=output.encode("ascii"),
+            source_bytes=len(output.encode("ascii")),
+            preview_svg=preview_svg,
+            polylines=len(document.polylines),
+            drawing_mm=document.drawing_distance_mm(),
+            pen_up_mm=document.pen_up_distance_mm(),
+            bounds=document.bounds(),
+            rotation=0,
+            scale=None,
+            source_type="Kalibrierung",
+            pens={"1": 1, "2": 2, "3": 3},
+            warnings=[],
+            profile_name=pen_profile["name"],
+            mapping_type="hpgl-pen",
+            profile_pens=pen_profile["pens"],
+        )
+        self._enqueue_prepared(prepared)
+        return {
+            "token": token,
+            "name": prepared.name,
+            "preview_url": f"/api/preview/{token}",
+            "paper": paper_name,
+            "window": window,
+            "margin": margin,
+            "measured": measured,
+            "paper_width_mm": paper.width_mm,
+            "paper_height_mm": paper.height_mm,
         }
 
     def queue_snapshot(self) -> list[dict]:
@@ -668,6 +794,13 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             result["pen_types"] = TYPE_LABELS
             result["pen_widths"] = [0.3, 0.5, 0.7, 1.0, 1.5]
             self._json(result)
+        elif path == "/api/calibration/profiles":
+            self._json(
+                {
+                    "profiles": self.app.calibrations.snapshot(),
+                    "active": self.app.calibrations.active_name(),
+                }
+            )
         elif path == "/api/jobs":
             self._json({"jobs": self.app.jobs.snapshot()})
         elif path == "/api/queue":
@@ -701,6 +834,29 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
                     dict(payload.get("options", {})),
                 )
                 self._json(result)
+            elif path == "/api/calibration":
+                self._json(self.app.prepare_calibration(payload), HTTPStatus.CREATED)
+            elif path == "/api/calibration/measure":
+                if self.app.state.snapshot()["status"] in {
+                    "sending",
+                    "waiting_xon",
+                    "paused",
+                    "cancelling",
+                }:
+                    raise RuntimeError("Während eines laufenden Plots ist keine Messung möglich")
+                port = str(payload.get("port", ""))
+                if not port:
+                    raise ValueError("Keine serielle Schnittstelle ausgewählt")
+                self._json(query_hard_clip(SerialSettings(port=port, timeout_s=5.0)))
+            elif path == "/api/calibration/profiles/save":
+                profile = self.app.calibrations.put(payload)
+                self._json({"profile": profile}, HTTPStatus.CREATED)
+            elif path == "/api/calibration/profiles/delete":
+                self.app.calibrations.delete(str(payload.get("name", "")))
+                self._json({"deleted": payload.get("name")})
+            elif path == "/api/calibration/profiles/activate":
+                profile = self.app.calibrations.activate(payload.get("name"))
+                self._json({"active": profile["name"] if profile else None})
             elif path == "/api/plot":
                 self.app.start(
                     str(payload.get("token", "")),
@@ -781,6 +937,7 @@ input,select,button{width:100%;padding:.7rem;border:1px solid #aab6af;border-rad
 button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;cursor:pointer}button:disabled{opacity:.45}
 .preview-card{align-self:start;overflow:hidden}.preview{min-height:420px;display:grid;place-items:center;overflow:auto}.preview img{display:block;max-width:100%;max-height:70vh}
 .plot-info{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-bottom:1rem}.plot-info div{background:#e7eee9;border-radius:8px;padding:.65rem}.plot-info strong,.plot-info span{display:block}.plot-info strong{color:#64736b;font-size:.75rem;text-transform:uppercase;letter-spacing:.03em}.plot-info span{margin-top:.25rem;font-weight:650;font-size:.9rem}
+.cal-measurements{display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin:.7rem 0}.cal-measurements div{min-width:0}.cal-measurements label{margin:.2rem 0}.cal-measurements input{width:100%;font-size:1rem}
 .checks{display:flex;gap:.5rem;align-items:center}.checks input{width:auto}.status{padding:.7rem;border-radius:7px;background:#e7eee9;margin-top:1rem}
 .facts{display:grid;grid-template-columns:1fr 1fr;gap:.4rem;font-size:.9rem;margin-top:1rem}.facts span:nth-child(odd){color:#64736b}
 .profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.profile-actions button{margin-top:.4rem}.pen-row{border-top:1px solid #dde3df;padding:.5rem 0}.pen-row strong{display:block}.pen-row .checks{margin:.3rem 0}.pen-row input,.pen-row select{padding:.4rem}
@@ -797,30 +954,40 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
-<button id="check">Datei prüfen und anzeigen</button><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
+<button id="check">Datei prüfen und anzeigen</button><details><summary>Kalibrierung vorbereiten</summary><label>Hard-Clip-Modus</label><select id="calwindow"><option value="norm">Norm</option><option value="exp">Exp</option><option value="type1">Type 1</option><option value="type3">Type 3</option></select><button id="calibrate">Kalibrierungszeichnung erzeugen</button><small>Verwendet Papierformat, Sicherheitsrand und Stiftprofil von oben.</small><h3>Vom Plotter gemessenes Blatt</h3><div class="cal-measurements"><div><label for="calpaperwidth">Breite (mm)</label><input id="calpaperwidth" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="297"></div><div><label for="calpaperheight">Länge (mm)</label><input id="calpaperheight" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="420"></div></div><button id="calmeasure">Zeichenfläche vom Plotter lesen</button><small>Die äußeren Blattmaße werden aus der gelesenen Zeichenfläche und den vier Rändern berechnet.</small><h3>Gemessene Abstände</h3><div class="cal-measurements"><div><label for="caltop">Oben (mm)</label><input id="caltop" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calbottom">Unten (mm)</label><input id="calbottom" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calleft">Links (mm)</label><input id="calleft" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calright">Rechts (mm)</label><input id="calright" type="number" min="0" step="0.1" inputmode="decimal"></div></div><button id="calcalculate">Messwerte berechnen</button><div id="calresult" class="status">Noch keine Messwerte berechnet</div><h3>Kalibrierungsprofil speichern</h3><label for="calprofilename">Profilname</label><input id="calprofilename" maxlength="60" placeholder="z. B. Zwischenformat Norm"><button id="calsave">Profil speichern</button><label for="calprofiles">Gespeicherte Profile</label><select id="calprofiles"><option value="">Keine gespeichert</option></select><div class="profile-actions"><button id="calactivate">Für Plots aktivieren</button><button id="caldeactivate">Kalibrierung ausschalten</button></div><button id="caldelete" class="danger">Profil löschen</button><small>Nur das ausdrücklich aktivierte Profil verändert Blattgröße, Zeichenfläche und Mittelpunktkorrektur neuer Plotaufträge.</small></details><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
 <label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
 <div class="plot-actions"><button id="plot" disabled>Plot starten</button><button id="abort" class="danger" hidden>Abbruch</button></div><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
 <section class="card preview-card"><div class="plot-info" id="plotinfo"><div><strong>Blatt</strong><span>–</span></div><div><strong>Plot</strong><span>–</span></div><div><strong>Ränder</strong><span>–</span></div><div><strong>Skalierung</strong><span>–</span></div></div><div class="preview" id="preview"><p>Hier erscheint die Vorschau.</p></div></section>
 <section class="card queue-card"><h2>Warteschlange</h2><p>Jeder Auftrag wird einzeln bestätigt und gestartet.</p><div class="queue" id="queue"><span>Keine vorbereiteten Aufträge</span></div></section>
 <section class="card history-card"><h2>Letzte Aufträge</h2><div class="jobs" id="jobs"><span>Noch keine Aufträge</span></div></section></main><script>
-let token=null,localMessage='',penMap={},mappingType='',mappingProfilePens={},profileData=null,editingOriginal=null,plotStatus='idle',plotStarted=false,previewBusy=false,previewQueued=false,queueBusy=false; const $=id=>document.getElementById(id);
+let token=null,localMessage='',penMap={},mappingType='',mappingProfilePens={},profileData=null,editingOriginal=null,plotStatus='idle',plotStarted=false,previewBusy=false,previewQueued=false,queueBusy=false,measuredHardClip=null; const $=id=>document.getElementById(id);
 async function api(path,data){const r=await fetch(path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):null});const j=await r.json();if(!r.ok)throw Error(j.error||'Fehler');return j}
 function currentProfile(){return profileData?.profiles[$('profile').value]}
 function renderProfile(){const profile=currentProfile(),box=$('peneditor');box.replaceChildren();if(!profile)return;for(let n=1;n<=8;n++){const pen=profile.pens[n],row=document.createElement('div');row.className='pen-row';const title=document.createElement('strong');title.textContent=`Stift ${n}`;const label=document.createElement('input');label.value=pen.label;label.onchange=()=>pen.label=label.value;const line=document.createElement('div');line.className='checks';const type=document.createElement('select');for(const [value,text] of Object.entries(profileData.pen_types)){const option=document.createElement('option');option.value=value;option.textContent=text;option.selected=value===pen.type;type.append(option)}type.onchange=()=>pen.type=type.value;const width=document.createElement('select');for(const value of profileData.pen_widths){const option=document.createElement('option');option.value=value;option.textContent=`${String(value).replace('.',',')} mm`;option.selected=value===pen.width_mm;width.append(option)}width.onchange=()=>pen.width_mm=+width.value;const color=document.createElement('input');color.type='color';color.value=/^#[0-9a-f]{6}$/i.test(pen.color)?pen.color:'#000000';color.onchange=()=>pen.color=color.value;line.append(type,width,color);row.append(title,label,line);box.append(row)}}
 async function loadProfiles(selected){profileData=await api('/api/profiles');const select=$('profile');select.replaceChildren();for(const name of Object.keys(profileData.profiles)){const option=document.createElement('option');option.value=name;option.textContent=name+(name===profileData.default?' · Standard':'');select.append(option)}select.value=selected&&profileData.profiles[selected]?selected:profileData.default;editingOriginal=select.value;renderProfile()}
 function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;requestPreview()};row.append(swatch,text,select);box.append(row)}}
 function renderPlotControls(){const active=['sending','waiting_xon','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':['sending','waiting_xon'].includes(plotStatus)?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
-function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`;$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
+function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`,cal=j.calibration_profile?` · Kalibrierung ${j.calibration_profile}`:'';$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}${cal}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
 async function loadJobs(){try{const data=await api('/api/jobs'),box=$('jobs');box.replaceChildren();if(!data.jobs.length){box.textContent='Noch keine Aufträge';return}for(const j of data.jobs.slice(0,10)){const row=document.createElement('div');row.className='job';const name=document.createElement('strong');name.textContent=j.name;const state=document.createElement('span');state.className=j.status;state.textContent=j.status;const progress=document.createElement('span');progress.textContent=j.total?`${Math.round(j.sent*100/j.total)} %`:'–';const time=document.createElement('span');time.textContent=new Date(j.started_at||j.created_at).toLocaleString('de-DE');row.append(name,state,progress,time);box.append(row)}}catch(e){$('jobs').textContent=e.message}}
 function renderQueue(items){const box=$('queue');box.replaceChildren();if(!items.length){box.textContent='Keine vorbereiteten Aufträge';return}const humanBytes=n=>n<1024?`${n} B`:n<1024*1024?`${(n/1024).toFixed(1).replace('.',',')} KB`:`${(n/1024/1024).toFixed(1).replace('.',',')} MB`;for(const [index,item] of items.entries()){const row=document.createElement('div');row.className='queue-item';const name=document.createElement('strong');name.textContent=`${item.position}. ${item.name}`;const profile=document.createElement('span');profile.textContent=`${item.profile_name} · ${item.status}`;const size=document.createElement('span');const plotSize=item.plot_width_mm==null?'–':`${String(item.plot_width_mm).replace('.',',')} × ${String(item.plot_height_mm).replace('.',',')} mm`;size.textContent=`${plotSize} · Datei ${humanBytes(item.source_bytes)}`;const actions=document.createElement('div');actions.className='queue-actions';const active=['sending','waiting_xon','paused','cancelling'].includes(item.status),startable=['prepared','cancelled','error'].includes(item.status);for(const [action,label,title] of [['start',item.status==='prepared'?'Plotten':'Erneut plotten',''],['remove','Entfernen',''],['up','↑','Nach oben'],['down','↓','Nach unten']]){const button=document.createElement('button');button.textContent=label;if(title)button.title=title;if(action==='remove')button.className='remove';button.disabled=queueBusy||active||(action==='start'&&!startable)||(action==='up'&&index===0)||(action==='down'&&index===items.length-1);button.onclick=()=>queueAction(item,action).catch(e=>{$('status').textContent=e.message});actions.append(button)}row.append(name,profile,size,actions);box.append(row)}}
 async function queueAction(item,action){if(queueBusy)return;queueBusy=true;try{if(action==='start'){const retry=item.status==='cancelled'||item.status==='error',question=retry?`Auftrag ${item.name} erneut plotten? Vorher den Plotter mit LOCAL und RESET leeren und das Blatt prüfen.`:`Plot ${item.name} jetzt starten? Der Plotter beginnt sich zu bewegen.`;if(!confirm(question))return;await api('/api/plot',{token:item.token,port:$('port').value,buffer_profile:$('buffer').value});token=item.token;plotStarted=true;plotStatus='sending';renderPlotControls();queueBusy=false;await loadQueue()}else{const data=await api('/api/queue/control',{token:item.token,action});queueBusy=false;renderQueue(data.queue);localMessage=action==='remove'?`${item.name} entfernt`:'Reihenfolge gespeichert';$('status').textContent=localMessage}await loadJobs()}finally{queueBusy=false}}
 async function loadQueue(){if(queueBusy)return;try{const data=await api('/api/queue');renderQueue(data.queue)}catch(e){$('queue').textContent=e.message}}
-async function status(){try{const s=await api('/api/status');$('version').textContent=`v${s.version}`;plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value;$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=old||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
+async function status(){try{const s=await api('/api/status');$('version').textContent=`v${s.version}`;plotStatus=s.status;renderPlotControls();if(!localMessage)$('status').textContent=s.message+(s.total?` · ${Math.round(s.sent*100/s.total)} %`:'');const old=$('port').value,preferred=s.ports.find(p=>/ttyUSB|ttyACM/i.test(p.device)||/USB.Serial/i.test(p.description));$('port').innerHTML=s.ports.length?s.ports.map(p=>`<option value="${p.device}">${p.device} · ${p.description}</option>`).join(''):'<option value="">Keine gefunden</option>';$('port').value=(old&&s.ports.some(p=>p.device===old)?old:'')||preferred?.device||($('port').options[0]?.value||'');}catch(e){$('status').textContent=e.message}}
 function requestPreview(){if(!$('file').files[0])return;token=null;plotStarted=false;renderPlotControls();if(previewBusy){previewQueued=true;localMessage='Einstellung geändert · Vorschau wird anschließend neu berechnet';$('status').textContent=localMessage;return}$('check').click()}
 $('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bitte eine HP-GL- oder SVG-Datei auswählen';return $('status').textContent=localMessage}if(f.size>20*1024*1024){localMessage=`${f.name} ist ${(f.size/1024/1024).toFixed(1)} MB groß; erlaubt sind 20 MB`;$('status').textContent=localMessage;return}previewBusy=true;$('check').disabled=true;localMessage='Prüfe und konvertiere Datei …';$('status').textContent=localMessage;const isSvg=f.name.toLowerCase().endsWith('.svg'),options={profile:$('profile').value,paper:$('paper').value,landscape:$('landscape').checked,margin:+$('margin').value,fit:$('fit').checked,rotation:$('rotation').value,optimize:$('optimize').checked,buffer_profile:$('buffer').value,pen_map:isSvg?penMap:{},hpgl_pen_map:isSvg?{}:penMap};try{const j=await api('/api/preview',{name:f.name,source:await f.text(),options});if(previewQueued)return;token=j.token;plotStarted=false;renderPlotControls();renderPlotInfo(j);$('preview').innerHTML=`<img src="${j.preview_url}" alt="Plotvorschau">`;penMap=j.pens||{};mappingType=j.mapping_type;mappingProfilePens=j.profile_pens||{};renderPenMap();const pens=Object.keys(penMap).length?Object.entries(penMap).map(([c,p])=>`${c} → ${p}`).join(', '):'Keine Stiftwahl erkannt';const format=j.paper.toUpperCase()+(j.landscape?' quer':' hoch')+` · ${j.paper_width_mm} × ${j.paper_height_mm} mm`;const warnings=(j.warnings||[]).join(' · ')||'Keine';$('facts').innerHTML=`<span>Quelle</span><span>${j.source_type}</span><span>Profil</span><span>${j.profile_name}</span><span>Format</span><span>${format}</span><span>Einpassen</span><span>${options.fit?'Ja':'Nein'}</span><span>Linienzüge</span><span>${j.polylines}</span><span>Zeichenweg</span><span>${j.drawing_mm} mm</span><span>Leerweg</span><span>${j.pen_up_mm} mm</span><span>Zuordnung</span><span>${pens}</span><span>Hinweise</span><span>${warnings}</span><span>Drehung</span><span>${j.rotation}°</span><span>Daten</span><span>${j.bytes} Bytes</span>`;localMessage='';$('status').textContent=`${j.name} geprüft und bereit`;}catch(e){if(!previewQueued){token=null;renderPlotControls();localMessage=e.message;$('status').textContent=localMessage}}finally{previewBusy=false;$('check').disabled=false;if(previewQueued){previewQueued=false;requestPreview()}}}
+async function readPlotterArea(){measuredHardClip=await api('/api/calibration/measure',{port:$('port').value});return measuredHardClip}
+$('calibrate').onclick=async()=>{try{$('calibrate').disabled=true;$('calresult').textContent='Lese aktuelle Zeichenfläche vom Plotter …';const measured=await readPlotterArea();$('calpaperwidth').value=measured.width_mm;$('calpaperheight').value=measured.height_mm;$('calresult').textContent=`Plotter-Zeichenfläche ${String(measured.width_mm).replace('.',',')} × ${String(measured.height_mm).replace('.',',')} mm · Kalibrierungszeichnung wird darauf ausgerichtet`;const j=await api('/api/calibration',{paper:$('paper').value,window:$('calwindow').value,margin:+$('margin').value,profile:$('profile').value,buffer_profile:$('buffer').value,measured_width_mm:measured.width_mm,measured_height_mm:measured.height_mm});token=j.token;plotStarted=false;renderPlotControls();$('preview').innerHTML=`<img src="${j.preview_url}" alt="Kalibrierungsvorschau">`;localMessage=`${j.name} · ${j.paper_width_mm} × ${j.paper_height_mm} mm geprüft und in Warteschlange`;$('status').textContent=localMessage;await loadQueue();await loadJobs()}catch(e){$('calresult').textContent=e.message;$('status').textContent=e.message}finally{$('calibrate').disabled=false}}
+$('calmeasure').onclick=async()=>{try{$('calmeasure').disabled=true;const j=await readPlotterArea(),marginFields=['caltop','calbottom','calleft','calright'];$('calpaperwidth').value=j.width_mm;$('calpaperheight').value=j.height_mm;if(marginFields.some(id=>$(id).value.trim()==='')){$('calresult').textContent=`Plotter-Zeichenfläche ${String(j.width_mm).replace('.',',')} × ${String(j.height_mm).replace('.',',')} mm als Voreinstellung übernommen · für äußere Blattmaße bitte alle vier Ränder eingeben`;return}const top=Number($('caltop').value.replace(',','.')),bottom=Number($('calbottom').value.replace(',','.')),left=Number($('calleft').value.replace(',','.')),right=Number($('calright').value.replace(',','.'));if([top,bottom,left,right].some(value=>!Number.isFinite(value)||value<0))throw Error('Bitte gültige Randwerte eingeben');$('calpaperwidth').value=(j.width_mm+left+right).toFixed(2);$('calpaperheight').value=(j.height_mm+top+bottom).toFixed(2);$('calcalculate').click()}catch(e){$('calresult').textContent=e.message}finally{$('calmeasure').disabled=false}}
+$('calcalculate').onclick=()=>{const fields=['calpaperwidth','calpaperheight','caltop','calbottom','calleft','calright'];if(fields.some(id=>$(id).value.trim()===''))return $('calresult').textContent='Bitte Blattmaße und alle vier Abstände in mm eingeben';const values=fields.map(id=>Number($(id).value.replace(',','.')));if(values.some(value=>!Number.isFinite(value)||value<0))return $('calresult').textContent='Bitte nur positive Millimeterwerte eingeben';const [width,height,top,bottom,left,right]=values,drawableWidth=width-left-right,drawableHeight=height-top-bottom,first=-(top-bottom)/2,second=-(left-right)/2;if(width<=0||height<=0||drawableWidth<=0||drawableHeight<=0)return $('calresult').textContent='Die Messwerte ergeben keine gültige Zeichenfläche';$('calresult').textContent=`Blatt ${width.toFixed(1).replace('.',',')} × ${height.toFixed(1).replace('.',',')} mm · Zeichenfläche ${drawableWidth.toFixed(1).replace('.',',')} × ${drawableHeight.toFixed(1).replace('.',',')} mm · Mittelpunktkorrektur Achse 1 ${first.toFixed(2).replace('.',',')} mm · Achse 2 ${second.toFixed(2).replace('.',',')} mm`}
+function calibrationPayload(){return{name:$('calprofilename').value,paper:$('paper').value,window:$('calwindow').value,paper_width_mm:$('calpaperwidth').value,paper_height_mm:$('calpaperheight').value,top_mm:$('caltop').value,bottom_mm:$('calbottom').value,left_mm:$('calleft').value,right_mm:$('calright').value}}
+async function loadCalibrationProfiles(selected){const data=await api('/api/calibration/profiles'),select=$('calprofiles');select.replaceChildren();const names=Object.keys(data.profiles);$('caldeactivate').disabled=!data.active;if(!names.length){const option=document.createElement('option');option.value='';option.textContent='Keine gespeichert';select.append(option);$('caldelete').disabled=true;$('calactivate').disabled=true;return}for(const name of names){const profile=data.profiles[name],option=document.createElement('option');option.value=name;option.textContent=`${name} · ${profile.paper_width_mm} × ${profile.paper_height_mm} mm · ${profile.window}${name===data.active?' · AKTIV':''}`;select.append(option)}select.value=selected&&data.profiles[selected]?selected:(data.active||names[0]);$('caldelete').disabled=false;$('calactivate').disabled=false;select.onchange=()=>{const p=data.profiles[select.value],active=p.name===data.active;$('calprofilename').value=p.name;$('paper').value=p.paper;$('calwindow').value=p.window;$('calpaperwidth').value=p.paper_width_mm;$('calpaperheight').value=p.paper_height_mm;$('caltop').value=p.top_mm;$('calbottom').value=p.bottom_mm;$('calleft').value=p.left_mm;$('calright').value=p.right_mm;$('calresult').textContent=`Gespeichert · Blatt ${String(p.paper_width_mm).replace('.',',')} × ${String(p.paper_height_mm).replace('.',',')} mm · Zeichenfläche ${String(p.drawable_width_mm).replace('.',',')} × ${String(p.drawable_height_mm).replace('.',',')} mm · ${active?'AKTIV':'nicht aktiv'}`};select.onchange()}
+$('calsave').onclick=async()=>{try{const data=await api('/api/calibration/profiles/save',calibrationPayload()),p=data.profile;$('calresult').textContent=`Profil ${p.name} gespeichert · Zeichenfläche ${String(p.drawable_width_mm).replace('.',',')} × ${String(p.drawable_height_mm).replace('.',',')} mm · noch nicht aktiv`;await loadCalibrationProfiles(p.name)}catch(e){$('calresult').textContent=e.message}}
+$('caldelete').onclick=async()=>{const name=$('calprofiles').value;if(!name||!confirm(`Kalibrierungsprofil ${name} löschen?`))return;try{await api('/api/calibration/profiles/delete',{name});$('calresult').textContent=`Profil ${name} gelöscht`;await loadCalibrationProfiles()}catch(e){$('calresult').textContent=e.message}}
+$('calactivate').onclick=async()=>{const name=$('calprofiles').value;if(!name||!confirm(`Kalibrierungsprofil ${name} für alle neuen Plotaufträge aktivieren?`))return;try{await api('/api/calibration/profiles/activate',{name});await loadCalibrationProfiles(name);$('calresult').textContent=`Profil ${name} ist AKTIV`;requestPreview()}catch(e){$('calresult').textContent=e.message}}
+$('caldeactivate').onclick=async()=>{if(!confirm('Gemessene Kalibrierung ausschalten und Standardwerte verwenden?'))return;try{await api('/api/calibration/profiles/activate',{name:null});await loadCalibrationProfiles();$('calresult').textContent='Gemessene Kalibrierung ausgeschaltet';requestPreview()}catch(e){$('calresult').textContent=e.message}}
 $('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';requestPreview()};
-$('paper').onchange=requestPreview;
+$('paper').onchange=()=>{const papers={a3:[297,420],a2:[420,594],a1:[594,841],a0:[841,1189]},size=papers[$('paper').value];$('calpaperwidth').value=size[0];$('calpaperheight').value=size[1];requestPreview()};
 $('landscape').onchange=requestPreview;
 $('fit').onchange=()=>{if(!$('fit').checked){$('rotation').value='0';$('rotation').disabled=true}else{$('rotation').disabled=false;$('rotation').value='auto'}requestPreview()};
 $('rotation').onchange=requestPreview;
@@ -831,5 +998,5 @@ $('defaultprofile').onclick=async()=>{try{await api('/api/profiles/default',{nam
 $('deleteprofile').onclick=async()=>{const name=$('profile').value;if(!confirm(`Profil ${name} wirklich löschen?`))return;try{await api('/api/profiles/delete',{name});await loadProfiles();$('status').textContent=`Profil ${name} gelöscht`}catch(e){localMessage=e.message;$('status').textContent=e.message}};
 $('plot').onclick=async()=>{try{if(['sending','waiting_xon'].includes(plotStatus)){await api('/api/plot/control',{action:'pause'});plotStatus='paused'}else if(plotStatus==='paused'){await api('/api/plot/control',{action:'resume'});plotStatus='sending'}else{if(!confirm('Der Plotter beginnt sich zu bewegen. Ist das Blatt eingelegt und der Stift frei?'))return;await api('/api/plot',{token,port:$('port').value,buffer_profile:$('buffer').value});plotStarted=true;plotStatus='sending'}renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
 $('abort').onclick=async()=>{if(!confirm('Plot wirklich abbrechen? Bereits empfangene Daten müssen am Plotter mit LOCAL und RESET gelöscht werden.'))return;try{await api('/api/plot/control',{action:'cancel'});plotStatus='cancelling';renderPlotControls();await status()}catch(e){$('status').textContent=e.message}}
-loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});status();loadQueue();loadJobs();setInterval(status,1000);setInterval(()=>{loadQueue();loadJobs()},3000);
+loadProfiles().catch(e=>{localMessage=e.message;$('status').textContent=e.message});loadCalibrationProfiles().catch(e=>{$('calresult').textContent=e.message});status();loadQueue();loadJobs();setInterval(status,1000);setInterval(()=>{loadQueue();loadJobs()},3000);
 </script></body></html>"""

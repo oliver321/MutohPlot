@@ -4,6 +4,7 @@ from mutohplot.serial_io import (
     BUFFER_PROFILES,
     SerialSettings,
     SerialTransmissionError,
+    query_hard_clip,
     send_bytes,
     wait_until_resumed,
 )
@@ -50,6 +51,39 @@ def test_profiles_match_xp500_buffers():
     assert BUFFER_PROFILES["large"].chunk_size > BUFFER_PROFILES["small"].chunk_size
     assert BUFFER_PROFILES["small"].chunk_size < 1000
     assert BUFFER_PROFILES["small"].hpgl_command_chars <= 1000
+
+
+def test_query_hard_clip_reads_plotter_factors_and_limits():
+    class QueryFake(Fake):
+        def write(self, block):
+            written = super().write(block)
+            self.incoming.extend(
+                b"100,100\r" if block == b"OF;" else b"-28260,-20379,28260,20380\r"
+            )
+            return written
+
+    fake = QueryFake()
+
+    result = query_hard_clip(SerialSettings("/dev/fake"), connection_factory=lambda _: fake)
+
+    assert result["width_mm"] == 407.59
+    assert result["height_mm"] == 565.2
+    assert result["limits"] == [-28260, -20379, 28260, 20380]
+    assert bytes(fake.data) == b"OF;OH;"
+    assert fake.closed
+
+
+def test_query_hard_clip_reports_port_and_missing_response():
+    fake = Fake()
+
+    with pytest.raises(SerialTransmissionError, match=r"/dev/fake.*nicht auf OF; geantwortet"):
+        query_hard_clip(
+            SerialSettings("/dev/fake"),
+            timeout_s=0,
+            connection_factory=lambda _: fake,
+        )
+
+    assert fake.closed
 
 
 def test_send_and_progress():

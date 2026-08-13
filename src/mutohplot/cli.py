@@ -7,17 +7,17 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
 
-from .calibration import create_a3_calibration
+from .calibration import create_calibration
 from .devices.mutoh_xp500 import MutohXP500
 from .document import PlotDocument
 from .geometry.point import Point
 from .geometry.polyline import Polyline
-from .hard_clip import DrawableArea, drawable_area, get_hard_clip
+from .hard_clip import DrawableArea, HardClipProfile, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
 from .optimize.paths import optimize_nearest
-from .paper import get_paper
+from .paper import Paper, get_paper
 from .pen_config import (
     SUPPORTED_PEN_WIDTHS_MM,
     PenConfigError,
@@ -141,7 +141,7 @@ def parser():
 
     cal = sub.add_parser("calibrate")
     cal.add_argument("output")
-    cal.add_argument("--paper", choices=["a3"], default="a3")
+    cal.add_argument("--paper", choices=["a3", "a2", "a1", "a0"], default="a3")
     cal.add_argument("--window", choices=["none", "norm", "exp", "type1", "type3"], default="norm")
     cal.add_argument("--margin", type=float, default=0.0)
     cal.add_argument("--device-unit", type=float, default=0.01)
@@ -465,8 +465,19 @@ def convert_hpgl(args, input_path, preview_path=None):
         initial_fill_spacings,
     ).parse_text(source_text)
     document = apply_pen_remap(document)
-    paper = get_paper(args.paper, args.landscape)
-    profile = get_hard_clip(args.window)
+    measured = getattr(args, "measured_calibration", None)
+    if measured:
+        paper = Paper(measured["name"], measured["paper_width_mm"], measured["paper_height_mm"])
+        profile = HardClipProfile(
+            measured["name"],
+            measured["top_mm"],
+            measured["bottom_mm"],
+            measured["left_mm"],
+            measured["right_mm"],
+        )
+    else:
+        paper = get_paper(args.paper, args.landscape)
+        profile = get_hard_clip(args.window)
     hard = drawable_area(paper, profile, 0)
     safe = drawable_area(paper, profile, args.margin)
     if not args.fit and (args.rotate or args.auto_rotate):
@@ -820,11 +831,11 @@ def main():
         return
 
     elif args.command == "calibrate":
-        paper = get_paper("a3")
+        paper = get_paper(args.paper)
         profile = get_hard_clip(args.window)
         hard = drawable_area(paper, profile, 0)
         safe = drawable_area(paper, profile, args.margin)
-        document = create_a3_calibration(args.window, args.margin)
+        document = create_calibration(args.paper, args.window, args.margin)
         base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
         correction = hard_clip_center_correction(profile)
         auto_first = 0.0 if args.no_hardclip_correction else correction.first_mm

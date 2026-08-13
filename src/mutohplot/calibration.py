@@ -55,9 +55,7 @@ def create_measured_calibration(
     )
 
 
-def _create_calibration(
-    paper: Paper, profile: HardClipProfile, margin_mm: float
-) -> PlotDocument:
+def _create_calibration(paper: Paper, profile: HardClipProfile, margin_mm: float) -> PlotDocument:
     hard = drawable_area(paper, profile, 0.0)
     safe = drawable_area(paper, profile, margin_mm)
 

@@ -467,9 +467,7 @@ def convert_hpgl(args, input_path, preview_path=None):
     document = apply_pen_remap(document)
     measured = getattr(args, "measured_calibration", None)
     if measured:
-        paper = Paper(
-            measured["name"], measured["paper_width_mm"], measured["paper_height_mm"]
-        )
+        paper = Paper(measured["name"], measured["paper_width_mm"], measured["paper_height_mm"])
         profile = HardClipProfile(
             measured["name"],
             measured["top_mm"],

@@ -288,12 +288,13 @@ class WebApplication:
             polyline.source_color = profile["pens"][str(polyline.pen)]["color"]
         measured = getattr(args, "measured_calibration", None)
         if measured:
-            paper = Paper(
-                measured["name"], measured["paper_width_mm"], measured["paper_height_mm"]
-            )
+            paper = Paper(measured["name"], measured["paper_width_mm"], measured["paper_height_mm"])
             hard_profile = HardClipProfile(
-                measured["name"], measured["top_mm"], measured["bottom_mm"],
-                measured["left_mm"], measured["right_mm"]
+                measured["name"],
+                measured["top_mm"],
+                measured["bottom_mm"],
+                measured["left_mm"],
+                measured["right_mm"],
             )
         else:
             paper = get_paper(args.paper, args.landscape)
@@ -794,10 +795,12 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             result["pen_widths"] = [0.3, 0.5, 0.7, 1.0, 1.5]
             self._json(result)
         elif path == "/api/calibration/profiles":
-            self._json({
-                "profiles": self.app.calibrations.snapshot(),
-                "active": self.app.calibrations.active_name(),
-            })
+            self._json(
+                {
+                    "profiles": self.app.calibrations.snapshot(),
+                    "active": self.app.calibrations.active_name(),
+                }
+            )
         elif path == "/api/jobs":
             self._json({"jobs": self.app.jobs.snapshot()})
         elif path == "/api/queue":
@@ -835,7 +838,10 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
                 self._json(self.app.prepare_calibration(payload), HTTPStatus.CREATED)
             elif path == "/api/calibration/measure":
                 if self.app.state.snapshot()["status"] in {
-                    "sending", "waiting_xon", "paused", "cancelling"
+                    "sending",
+                    "waiting_xon",
+                    "paused",
+                    "cancelling",
                 }:
                     raise RuntimeError("Während eines laufenden Plots ist keine Messung möglich")
                 port = str(payload.get("port", ""))

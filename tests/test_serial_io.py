@@ -64,9 +64,7 @@ def test_query_hard_clip_reads_plotter_factors_and_limits():
 
     fake = QueryFake()
 
-    result = query_hard_clip(
-        SerialSettings("/dev/fake"), connection_factory=lambda _: fake
-    )
+    result = query_hard_clip(SerialSettings("/dev/fake"), connection_factory=lambda _: fake)
 
     assert result["width_mm"] == 407.59
     assert result["height_mm"] == 565.2
@@ -78,9 +76,7 @@ def test_query_hard_clip_reads_plotter_factors_and_limits():
 def test_query_hard_clip_reports_port_and_missing_response():
     fake = Fake()
 
-    with pytest.raises(
-        SerialTransmissionError, match=r"/dev/fake.*nicht auf OF; geantwortet"
-    ):
+    with pytest.raises(SerialTransmissionError, match=r"/dev/fake.*nicht auf OF; geantwortet"):
         query_hard_clip(
             SerialSettings("/dev/fake"),
             timeout_s=0,

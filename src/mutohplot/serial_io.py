@@ -135,9 +135,7 @@ def query_hard_clip(settings, timeout_s: float = 5.0, connection_factory=None) -
         limits = _read_plotter_response(connection, timeout_s, "OH;")
         try:
             factor_x, factor_y = [float(value) for value in re.split(r"\s*,\s*", factors)]
-            x_min, y_min, x_max, y_max = [
-                float(value) for value in re.split(r"\s*,\s*", limits)
-            ]
+            x_min, y_min, x_max, y_max = [float(value) for value in re.split(r"\s*,\s*", limits)]
         except (TypeError, ValueError) as error:
             raise SerialTransmissionError(
                 f"Unerwartete Plotterantwort: OF={factors!r}, OH={limits!r}"
@@ -157,7 +155,9 @@ def query_hard_clip(settings, timeout_s: float = 5.0, connection_factory=None) -
     except SerialTransmissionError as error:
         raise SerialTransmissionError(f"Plotterabfrage auf {settings.port}: {error}") from error
     except (OSError, TimeoutError) as error:
-        raise SerialTransmissionError(f"Plotterabfrage auf {settings.port} fehlgeschlagen: {error}") from error
+        raise SerialTransmissionError(
+            f"Plotterabfrage auf {settings.port} fehlgeschlagen: {error}"
+        ) from error
     finally:
         connection.close()
 

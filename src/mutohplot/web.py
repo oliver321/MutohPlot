@@ -22,13 +22,13 @@ from .calibration import create_calibration
 from .calibration_profiles import CalibrationProfileStore
 from .cli import convert_hpgl, ra_fill_spacings
 from .devices.mutoh_xp500 import MutohXP500
-from .hard_clip import drawable_area, get_hard_clip
+from .hard_clip import HardClipProfile, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .job_history import JobHistory
 from .optimize.geometry import optimize_geometry
 from .optimize.paths import optimize_nearest
-from .paper import get_paper
+from .paper import Paper, get_paper
 from .prepared_queue import PreparedQueueStore
 from .report import check_bounds
 from .serial_io import (
@@ -285,10 +285,20 @@ class WebApplication:
         unsupported = sorted(set(document.metadata.get("unsupported_svg_elements", [])))
         for polyline in document.polylines:
             polyline.source_color = profile["pens"][str(polyline.pen)]["color"]
-        paper = get_paper(args.paper, args.landscape)
-        profile = get_hard_clip("norm")
-        hard = drawable_area(paper, profile, 0)
-        safe = drawable_area(paper, profile, args.margin)
+        measured = getattr(args, "measured_calibration", None)
+        if measured:
+            paper = Paper(
+                measured["name"], measured["paper_width_mm"], measured["paper_height_mm"]
+            )
+            hard_profile = HardClipProfile(
+                measured["name"], measured["top_mm"], measured["bottom_mm"],
+                measured["left_mm"], measured["right_mm"]
+            )
+        else:
+            paper = get_paper(args.paper, args.landscape)
+            hard_profile = get_hard_clip("norm")
+        hard = drawable_area(paper, hard_profile, 0)
+        safe = drawable_area(paper, hard_profile, args.margin)
         rotation = 0
         fit_scale = None
         if args.fit:
@@ -316,7 +326,7 @@ class WebApplication:
         write_preview(document, preview_path, paper=paper, hard_clip=hard, safe_area=safe)
 
         base = CoordinateTransform.svg_to_mutoh(paper.width_mm, paper.height_mm)
-        correction = hard_clip_center_correction(profile)
+        correction = hard_clip_center_correction(hard_profile)
         transform = CoordinateTransform(
             base.a,
             base.b,
@@ -346,6 +356,7 @@ class WebApplication:
         if len(source.encode("utf-8")) > MAX_UPLOAD_BYTES:
             raise ValueError("Die Plotdatei ist größer als 20 MB")
         args = _conversion_args(options)
+        args.measured_calibration = self.calibrations.active_profile()
         profile = self.profiles.get(str(options.get("profile", "")) or None)
         suffix = Path(name).suffix.lower()
         if suffix not in {".hpgl", ".plt", ".svg"}:
@@ -392,7 +403,14 @@ class WebApplication:
             profile_pens=profile["pens"],
         )
         self._enqueue_prepared(prepared)
-        paper = get_paper(args.paper, args.landscape)
+        if args.measured_calibration:
+            paper = Paper(
+                args.measured_calibration["name"],
+                args.measured_calibration["paper_width_mm"],
+                args.measured_calibration["paper_height_mm"],
+            )
+        else:
+            paper = get_paper(args.paper, args.landscape)
         return {
             "token": token,
             "name": prepared.name,
@@ -406,8 +424,8 @@ class WebApplication:
             "bytes": len(prepared.data),
             "source_bytes": prepared.source_bytes,
             "source_type": prepared.source_type,
-            "paper": args.paper,
-            "landscape": args.landscape,
+            "paper": paper.name if args.measured_calibration else args.paper,
+            "landscape": False if args.measured_calibration else args.landscape,
             "paper_width_mm": paper.width_mm,
             "paper_height_mm": paper.height_mm,
             "pens": prepared.pens,
@@ -415,6 +433,9 @@ class WebApplication:
             "profile_name": prepared.profile_name,
             "mapping_type": prepared.mapping_type,
             "profile_pens": prepared.profile_pens,
+            "calibration_profile": (
+                args.measured_calibration["name"] if args.measured_calibration else None
+            ),
         }
 
     def prepare_calibration(self, options: dict) -> dict:
@@ -750,7 +771,10 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             result["pen_widths"] = [0.3, 0.5, 0.7, 1.0, 1.5]
             self._json(result)
         elif path == "/api/calibration/profiles":
-            self._json({"profiles": self.app.calibrations.snapshot(), "active": None})
+            self._json({
+                "profiles": self.app.calibrations.snapshot(),
+                "active": self.app.calibrations.active_name(),
+            })
         elif path == "/api/jobs":
             self._json({"jobs": self.app.jobs.snapshot()})
         elif path == "/api/queue":
@@ -792,6 +816,9 @@ class MutohPlotHandler(BaseHTTPRequestHandler):
             elif path == "/api/calibration/profiles/delete":
                 self.app.calibrations.delete(str(payload.get("name", "")))
                 self._json({"deleted": payload.get("name")})
+            elif path == "/api/calibration/profiles/activate":
+                profile = self.app.calibrations.activate(payload.get("name"))
+                self._json({"active": profile["name"] if profile else None})
             elif path == "/api/plot":
                 self.app.start(
                     str(payload.get("token", "")),
@@ -889,7 +916,7 @@ button{margin-top:1rem;background:#176b4c;color:white;border:0;font-weight:650;c
 <label class="checks"><input id="fit" type="checkbox" checked> Auf sicheren Bereich einpassen</label>
 <label>Drehung</label><select id="rotation"><option value="auto">Automatisch · beste Ausnutzung</option><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
 <label class="checks"><input id="optimize" type="checkbox" checked> Leerwege optimieren</label>
-<button id="check">Datei prüfen und anzeigen</button><details><summary>Kalibrierung vorbereiten</summary><label>Hard-Clip-Modus</label><select id="calwindow"><option value="norm">Norm</option><option value="exp">Exp</option><option value="type1">Type 1</option><option value="type3">Type 3</option></select><button id="calibrate">Kalibrierungszeichnung erzeugen</button><small>Verwendet Papierformat, Sicherheitsrand und Stiftprofil von oben.</small><h3>Vom Plotter gemessenes Blatt</h3><div class="cal-measurements"><div><label for="calpaperwidth">Breite (mm)</label><input id="calpaperwidth" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="297"></div><div><label for="calpaperheight">Länge (mm)</label><input id="calpaperheight" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="420"></div></div><small>A-Format ist nur die Vorbelegung. Hier die tatsächlich erkannte Breite und Länge eintragen.</small><h3>Gemessene Abstände</h3><div class="cal-measurements"><div><label for="caltop">Oben (mm)</label><input id="caltop" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calbottom">Unten (mm)</label><input id="calbottom" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calleft">Links (mm)</label><input id="calleft" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calright">Rechts (mm)</label><input id="calright" type="number" min="0" step="0.1" inputmode="decimal"></div></div><button id="calcalculate">Messwerte berechnen</button><div id="calresult" class="status">Noch keine Messwerte berechnet</div><h3>Kalibrierungsprofil speichern</h3><label for="calprofilename">Profilname</label><input id="calprofilename" maxlength="60" placeholder="z. B. Zwischenformat Norm"><button id="calsave">Profil speichern</button><label for="calprofiles">Gespeicherte Profile</label><select id="calprofiles"><option value="">Keine gespeichert</option></select><button id="caldelete" class="danger">Profil löschen</button><small>Gespeicherte Profile sind noch nicht aktiv und verändern keine Plotdaten.</small></details><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
+<button id="check">Datei prüfen und anzeigen</button><details><summary>Kalibrierung vorbereiten</summary><label>Hard-Clip-Modus</label><select id="calwindow"><option value="norm">Norm</option><option value="exp">Exp</option><option value="type1">Type 1</option><option value="type3">Type 3</option></select><button id="calibrate">Kalibrierungszeichnung erzeugen</button><small>Verwendet Papierformat, Sicherheitsrand und Stiftprofil von oben.</small><h3>Vom Plotter gemessenes Blatt</h3><div class="cal-measurements"><div><label for="calpaperwidth">Breite (mm)</label><input id="calpaperwidth" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="297"></div><div><label for="calpaperheight">Länge (mm)</label><input id="calpaperheight" type="number" min="1" max="5000" step="0.1" inputmode="decimal" value="420"></div></div><small>A-Format ist nur die Vorbelegung. Hier die tatsächlich erkannte Breite und Länge eintragen.</small><h3>Gemessene Abstände</h3><div class="cal-measurements"><div><label for="caltop">Oben (mm)</label><input id="caltop" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calbottom">Unten (mm)</label><input id="calbottom" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calleft">Links (mm)</label><input id="calleft" type="number" min="0" step="0.1" inputmode="decimal"></div><div><label for="calright">Rechts (mm)</label><input id="calright" type="number" min="0" step="0.1" inputmode="decimal"></div></div><button id="calcalculate">Messwerte berechnen</button><div id="calresult" class="status">Noch keine Messwerte berechnet</div><h3>Kalibrierungsprofil speichern</h3><label for="calprofilename">Profilname</label><input id="calprofilename" maxlength="60" placeholder="z. B. Zwischenformat Norm"><button id="calsave">Profil speichern</button><label for="calprofiles">Gespeicherte Profile</label><select id="calprofiles"><option value="">Keine gespeichert</option></select><div class="profile-actions"><button id="calactivate">Für Plots aktivieren</button><button id="caldeactivate">Kalibrierung ausschalten</button></div><button id="caldelete" class="danger">Profil löschen</button><small>Nur das ausdrücklich aktivierte Profil verändert Blattgröße, Zeichenfläche und Mittelpunktkorrektur neuer Plotaufträge.</small></details><hr><label>Serielle Schnittstelle</label><select id="port"><option value="">Keine gefunden</option></select>
 <label>Empfangspuffer des Plotters</label><select id="buffer"><option value="small">1000 Zeichen · sicher</option><option value="large">1 MB · schnell</option></select>
 <div id="penmap"></div>
 <div class="plot-actions"><button id="plot" disabled>Plot starten</button><button id="abort" class="danger" hidden>Abbruch</button></div><div id="status" class="status">Bereit</div><div id="facts" class="facts"></div></section>
@@ -903,7 +930,7 @@ function renderProfile(){const profile=currentProfile(),box=$('peneditor');box.r
 async function loadProfiles(selected){profileData=await api('/api/profiles');const select=$('profile');select.replaceChildren();for(const name of Object.keys(profileData.profiles)){const option=document.createElement('option');option.value=name;option.textContent=name+(name===profileData.default?' · Standard':'');select.append(option)}select.value=selected&&profileData.profiles[selected]?selected:profileData.default;editingOriginal=select.value;renderProfile()}
 function renderPenMap(){const box=$('penmap');box.replaceChildren();const entries=Object.entries(penMap);if(!entries.length)return;const title=document.createElement('label');title.textContent='Quelldarstellung → tatsächlicher Stift';box.append(title);for(const [source,pen] of entries){const actual=mappingProfilePens[pen]||{},row=document.createElement('label');row.className='checks';const swatch=document.createElement('span');swatch.style.cssText='width:1.2rem;height:1.2rem;border:1px solid #777;border-radius:50%;flex:none';swatch.style.backgroundColor=actual.color||'#000000';const text=document.createElement('span');text.textContent=mappingType==='hpgl-pen'?`HP-GL Stift ${source} →`:`SVG ${source} →`;const select=document.createElement('select');select.style.width='auto';for(let n=1;n<=8;n++){const configured=mappingProfilePens[n]||{};const option=document.createElement('option');option.value=n;option.textContent=`Stift ${n} · ${configured.label||''} · ${configured.color||''}`;option.selected=n===pen;select.append(option)}select.onchange=()=>{penMap[source]=+select.value;requestPreview()};row.append(swatch,text,select);box.append(row)}}
 function renderPlotControls(){const active=['sending','waiting_xon','paused','cancelling'].includes(plotStatus);$('abort').hidden=!active;$('abort').disabled=plotStatus==='cancelling';$('plot').textContent=plotStatus==='paused'?'Go':['sending','waiting_xon'].includes(plotStatus)?'Stop':'Plot starten';$('plot').disabled=plotStatus==='cancelling'||(!active&&(plotStarted||!token))}
-function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`;$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
+function renderPlotInfo(j){const mm=n=>`${Number(n).toFixed(1).replace('.',',')} mm`,b=j.bounds||[0,0,0,0],plotWidth=b[2]-b[0],plotHeight=b[3]-b[1],right=j.paper_width_mm-b[2],bottom=j.paper_height_mm-b[3],scale=j.scale==null?'Originalgröße':`${(j.scale*100).toFixed(1).replace('.',',')} %`,cal=j.calibration_profile?` · Kalibrierung ${j.calibration_profile}`:'';$('plotinfo').innerHTML=`<div><strong>Blatt</strong><span>${j.paper.toUpperCase()} ${j.landscape?'quer':'hoch'} · ${mm(j.paper_width_mm)} × ${mm(j.paper_height_mm)}${cal}</span></div><div><strong>Plot</strong><span>${mm(plotWidth)} × ${mm(plotHeight)}</span></div><div><strong>Ränder</strong><span>L ${mm(b[0])} · R ${mm(right)} · O ${mm(b[1])} · U ${mm(bottom)}</span></div><div><strong>Skalierung</strong><span>${scale} · ${j.rotation}°</span></div>`}
 async function loadJobs(){try{const data=await api('/api/jobs'),box=$('jobs');box.replaceChildren();if(!data.jobs.length){box.textContent='Noch keine Aufträge';return}for(const j of data.jobs.slice(0,10)){const row=document.createElement('div');row.className='job';const name=document.createElement('strong');name.textContent=j.name;const state=document.createElement('span');state.className=j.status;state.textContent=j.status;const progress=document.createElement('span');progress.textContent=j.total?`${Math.round(j.sent*100/j.total)} %`:'–';const time=document.createElement('span');time.textContent=new Date(j.started_at||j.created_at).toLocaleString('de-DE');row.append(name,state,progress,time);box.append(row)}}catch(e){$('jobs').textContent=e.message}}
 function renderQueue(items){const box=$('queue');box.replaceChildren();if(!items.length){box.textContent='Keine vorbereiteten Aufträge';return}const humanBytes=n=>n<1024?`${n} B`:n<1024*1024?`${(n/1024).toFixed(1).replace('.',',')} KB`:`${(n/1024/1024).toFixed(1).replace('.',',')} MB`;for(const [index,item] of items.entries()){const row=document.createElement('div');row.className='queue-item';const name=document.createElement('strong');name.textContent=`${item.position}. ${item.name}`;const profile=document.createElement('span');profile.textContent=`${item.profile_name} · ${item.status}`;const size=document.createElement('span');const plotSize=item.plot_width_mm==null?'–':`${String(item.plot_width_mm).replace('.',',')} × ${String(item.plot_height_mm).replace('.',',')} mm`;size.textContent=`${plotSize} · Datei ${humanBytes(item.source_bytes)}`;const actions=document.createElement('div');actions.className='queue-actions';const active=['sending','waiting_xon','paused','cancelling'].includes(item.status),startable=['prepared','cancelled','error'].includes(item.status);for(const [action,label,title] of [['start',item.status==='prepared'?'Plotten':'Erneut plotten',''],['remove','Entfernen',''],['up','↑','Nach oben'],['down','↓','Nach unten']]){const button=document.createElement('button');button.textContent=label;if(title)button.title=title;if(action==='remove')button.className='remove';button.disabled=queueBusy||active||(action==='start'&&!startable)||(action==='up'&&index===0)||(action==='down'&&index===items.length-1);button.onclick=()=>queueAction(item,action).catch(e=>{$('status').textContent=e.message});actions.append(button)}row.append(name,profile,size,actions);box.append(row)}}
 async function queueAction(item,action){if(queueBusy)return;queueBusy=true;try{if(action==='start'){const retry=item.status==='cancelled'||item.status==='error',question=retry?`Auftrag ${item.name} erneut plotten? Vorher den Plotter mit LOCAL und RESET leeren und das Blatt prüfen.`:`Plot ${item.name} jetzt starten? Der Plotter beginnt sich zu bewegen.`;if(!confirm(question))return;await api('/api/plot',{token:item.token,port:$('port').value,buffer_profile:$('buffer').value});token=item.token;plotStarted=true;plotStatus='sending';renderPlotControls();queueBusy=false;await loadQueue()}else{const data=await api('/api/queue/control',{token:item.token,action});queueBusy=false;renderQueue(data.queue);localMessage=action==='remove'?`${item.name} entfernt`:'Reihenfolge gespeichert';$('status').textContent=localMessage}await loadJobs()}finally{queueBusy=false}}
@@ -914,9 +941,11 @@ $('check').onclick=async()=>{const f=$('file').files[0];if(!f){localMessage='Bit
 $('calibrate').onclick=async()=>{try{$('calibrate').disabled=true;const j=await api('/api/calibration',{paper:$('paper').value,window:$('calwindow').value,margin:+$('margin').value,profile:$('profile').value,buffer_profile:$('buffer').value});token=j.token;plotStarted=false;renderPlotControls();$('preview').innerHTML=`<img src="${j.preview_url}" alt="Kalibrierungsvorschau">`;localMessage=`${j.name} geprüft und in Warteschlange`;$('status').textContent=localMessage;await loadQueue();await loadJobs()}catch(e){$('status').textContent=e.message}finally{$('calibrate').disabled=false}}
 $('calcalculate').onclick=()=>{const fields=['calpaperwidth','calpaperheight','caltop','calbottom','calleft','calright'];if(fields.some(id=>$(id).value.trim()===''))return $('calresult').textContent='Bitte Blattmaße und alle vier Abstände in mm eingeben';const values=fields.map(id=>Number($(id).value.replace(',','.')));if(values.some(value=>!Number.isFinite(value)||value<0))return $('calresult').textContent='Bitte nur positive Millimeterwerte eingeben';const [width,height,top,bottom,left,right]=values,drawableWidth=width-left-right,drawableHeight=height-top-bottom,first=-(top-bottom)/2,second=-(left-right)/2;if(width<=0||height<=0||drawableWidth<=0||drawableHeight<=0)return $('calresult').textContent='Die Messwerte ergeben keine gültige Zeichenfläche';$('calresult').textContent=`Blatt ${width.toFixed(1).replace('.',',')} × ${height.toFixed(1).replace('.',',')} mm · Zeichenfläche ${drawableWidth.toFixed(1).replace('.',',')} × ${drawableHeight.toFixed(1).replace('.',',')} mm · Mittelpunktkorrektur Achse 1 ${first.toFixed(2).replace('.',',')} mm · Achse 2 ${second.toFixed(2).replace('.',',')} mm`}
 function calibrationPayload(){return{name:$('calprofilename').value,paper:$('paper').value,window:$('calwindow').value,paper_width_mm:$('calpaperwidth').value,paper_height_mm:$('calpaperheight').value,top_mm:$('caltop').value,bottom_mm:$('calbottom').value,left_mm:$('calleft').value,right_mm:$('calright').value}}
-async function loadCalibrationProfiles(selected){const data=await api('/api/calibration/profiles'),select=$('calprofiles');select.replaceChildren();const names=Object.keys(data.profiles);if(!names.length){const option=document.createElement('option');option.value='';option.textContent='Keine gespeichert';select.append(option);$('caldelete').disabled=true;return}for(const name of names){const profile=data.profiles[name],option=document.createElement('option');option.value=name;option.textContent=`${name} · ${profile.paper_width_mm} × ${profile.paper_height_mm} mm · ${profile.window}`;select.append(option)}select.value=selected&&data.profiles[selected]?selected:names[0];$('caldelete').disabled=false;select.onchange=()=>{const p=data.profiles[select.value];$('calprofilename').value=p.name;$('paper').value=p.paper;$('calwindow').value=p.window;$('calpaperwidth').value=p.paper_width_mm;$('calpaperheight').value=p.paper_height_mm;$('caltop').value=p.top_mm;$('calbottom').value=p.bottom_mm;$('calleft').value=p.left_mm;$('calright').value=p.right_mm;$('calresult').textContent=`Gespeichert · Blatt ${String(p.paper_width_mm).replace('.',',')} × ${String(p.paper_height_mm).replace('.',',')} mm · Zeichenfläche ${String(p.drawable_width_mm).replace('.',',')} × ${String(p.drawable_height_mm).replace('.',',')} mm · noch nicht aktiv`};select.onchange()}
+async function loadCalibrationProfiles(selected){const data=await api('/api/calibration/profiles'),select=$('calprofiles');select.replaceChildren();const names=Object.keys(data.profiles);$('caldeactivate').disabled=!data.active;if(!names.length){const option=document.createElement('option');option.value='';option.textContent='Keine gespeichert';select.append(option);$('caldelete').disabled=true;$('calactivate').disabled=true;return}for(const name of names){const profile=data.profiles[name],option=document.createElement('option');option.value=name;option.textContent=`${name} · ${profile.paper_width_mm} × ${profile.paper_height_mm} mm · ${profile.window}${name===data.active?' · AKTIV':''}`;select.append(option)}select.value=selected&&data.profiles[selected]?selected:(data.active||names[0]);$('caldelete').disabled=false;$('calactivate').disabled=false;select.onchange=()=>{const p=data.profiles[select.value],active=p.name===data.active;$('calprofilename').value=p.name;$('paper').value=p.paper;$('calwindow').value=p.window;$('calpaperwidth').value=p.paper_width_mm;$('calpaperheight').value=p.paper_height_mm;$('caltop').value=p.top_mm;$('calbottom').value=p.bottom_mm;$('calleft').value=p.left_mm;$('calright').value=p.right_mm;$('calresult').textContent=`Gespeichert · Blatt ${String(p.paper_width_mm).replace('.',',')} × ${String(p.paper_height_mm).replace('.',',')} mm · Zeichenfläche ${String(p.drawable_width_mm).replace('.',',')} × ${String(p.drawable_height_mm).replace('.',',')} mm · ${active?'AKTIV':'nicht aktiv'}`};select.onchange()}
 $('calsave').onclick=async()=>{try{const data=await api('/api/calibration/profiles/save',calibrationPayload()),p=data.profile;$('calresult').textContent=`Profil ${p.name} gespeichert · Zeichenfläche ${String(p.drawable_width_mm).replace('.',',')} × ${String(p.drawable_height_mm).replace('.',',')} mm · noch nicht aktiv`;await loadCalibrationProfiles(p.name)}catch(e){$('calresult').textContent=e.message}}
 $('caldelete').onclick=async()=>{const name=$('calprofiles').value;if(!name||!confirm(`Kalibrierungsprofil ${name} löschen?`))return;try{await api('/api/calibration/profiles/delete',{name});$('calresult').textContent=`Profil ${name} gelöscht`;await loadCalibrationProfiles()}catch(e){$('calresult').textContent=e.message}}
+$('calactivate').onclick=async()=>{const name=$('calprofiles').value;if(!name||!confirm(`Kalibrierungsprofil ${name} für alle neuen Plotaufträge aktivieren?`))return;try{await api('/api/calibration/profiles/activate',{name});await loadCalibrationProfiles(name);$('calresult').textContent=`Profil ${name} ist AKTIV`;requestPreview()}catch(e){$('calresult').textContent=e.message}}
+$('caldeactivate').onclick=async()=>{if(!confirm('Gemessene Kalibrierung ausschalten und Standardwerte verwenden?'))return;try{await api('/api/calibration/profiles/activate',{name:null});await loadCalibrationProfiles();$('calresult').textContent='Gemessene Kalibrierung ausgeschaltet';requestPreview()}catch(e){$('calresult').textContent=e.message}}
 $('file').onchange=()=>{const f=$('file').files[0];if(!f)return;penMap={};renderPenMap();$('selection').textContent=`Ausgewählt: ${f.name} · ${(f.size/1024/1024).toFixed(2)} MB`;localMessage='';requestPreview()};
 $('paper').onchange=()=>{const papers={a3:[297,420],a2:[420,594],a1:[594,841],a0:[841,1189]},size=papers[$('paper').value];$('calpaperwidth').value=size[0];$('calpaperheight').value=size[1];requestPreview()};
 $('landscape').onchange=requestPreview;

@@ -73,14 +73,25 @@ class CalibrationProfileStore:
             or Path.home() / ".config" / "mutohplot" / "calibration-profiles.json"
         )
         self.lock = threading.Lock()
-        self._profiles = self._load()
+        self._profiles, self._active = self._load()
 
-    def _load(self) -> dict[str, dict]:
+    def _load(self) -> tuple[dict[str, dict], str | None]:
         if not self.path.is_file():
-            return {}
+            return {}, None
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            return {name: validate_calibration_profile(profile) for name, profile in raw.items()}
+            if "profiles" in raw:
+                profiles = raw["profiles"]
+                active = raw.get("active")
+            else:
+                profiles = raw
+                active = None
+            validated = {
+                name: validate_calibration_profile(profile) for name, profile in profiles.items()
+            }
+            if active is not None and active not in validated:
+                raise ValueError("Aktives Kalibrierungsprofil ist nicht vorhanden")
+            return validated, active
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
             raise ValueError(
                 f"Kalibrierungsprofile konnten nicht geladen werden: {error}"
@@ -93,7 +104,12 @@ class CalibrationProfileStore:
         )
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                json.dump(self._profiles, stream, ensure_ascii=False, indent=2)
+                json.dump(
+                    {"profiles": self._profiles, "active": self._active},
+                    stream,
+                    ensure_ascii=False,
+                    indent=2,
+                )
                 stream.write("\n")
             os.replace(temporary, self.path)
         finally:
@@ -104,9 +120,31 @@ class CalibrationProfileStore:
         with self.lock:
             return deepcopy(self._profiles)
 
+    def active_name(self) -> str | None:
+        with self.lock:
+            return self._active
+
+    def active_profile(self) -> dict | None:
+        with self.lock:
+            return deepcopy(self._profiles.get(self._active))
+
+    def activate(self, name: str | None) -> dict | None:
+        with self.lock:
+            if name in {None, ""}:
+                self._active = None
+                self._save()
+                return None
+            if name not in self._profiles:
+                raise ValueError(f"Unbekanntes Kalibrierungsprofil: {name}")
+            self._active = name
+            self._save()
+            return deepcopy(self._profiles[name])
+
     def put(self, profile: dict) -> dict:
         validated = validate_calibration_profile(profile)
         with self.lock:
+            if self._active == validated["name"]:
+                self._active = None
             self._profiles[validated["name"]] = validated
             self._save()
             return deepcopy(validated)
@@ -116,4 +154,6 @@ class CalibrationProfileStore:
             if name not in self._profiles:
                 raise ValueError(f"Unbekanntes Kalibrierungsprofil: {name}")
             del self._profiles[name]
+            if self._active == name:
+                self._active = None
             self._save()

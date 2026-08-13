@@ -187,6 +187,35 @@ def test_prepare_svg_uses_selected_paper_size(paper, width, height):
     assert result["paper_height_mm"] == height
 
 
+def test_active_calibration_controls_measured_paper_and_preview():
+    app = WebApplication()
+    app.calibrations.put(
+        {
+            "name": "Zwischenformat",
+            "paper": "a3",
+            "window": "type3",
+            "paper_width_mm": 350,
+            "paper_height_mm": 500,
+            "top_mm": 30,
+            "bottom_mm": 10,
+            "left_mm": 12,
+            "right_mm": 8,
+        }
+    )
+    app.calibrations.activate("Zwischenformat")
+
+    result = app.prepare("zeichnung.svg", SIMPLE_SVG, {"paper": "a0", "optimize": False})
+
+    assert result["paper"] == "Zwischenformat"
+    assert result["paper_width_mm"] == 350
+    assert result["paper_height_mm"] == 500
+    assert result["landscape"] is False
+    assert result["calibration_profile"] == "Zwischenformat"
+    preview = app.state.prepared[result["token"]].preview_svg
+    assert 'width="350.0mm"' in preview
+    assert 'height="500.0mm"' in preview
+
+
 def test_web_queues_changed_options_during_active_preview():
     assert "if(previewBusy){previewQueued=true" in PAGE
     assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE

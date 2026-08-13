@@ -12,12 +12,12 @@ from .devices.mutoh_xp500 import MutohXP500
 from .document import PlotDocument
 from .geometry.point import Point
 from .geometry.polyline import Polyline
-from .hard_clip import DrawableArea, drawable_area, get_hard_clip
+from .hard_clip import DrawableArea, HardClipProfile, drawable_area, get_hard_clip
 from .hpgl.parser import HPGLParser
 from .hpgl.writer import HPGLWriter
 from .optimize.geometry import QUALITY_PROFILES, optimize_geometry
 from .optimize.paths import optimize_nearest
-from .paper import get_paper
+from .paper import Paper, get_paper
 from .pen_config import (
     SUPPORTED_PEN_WIDTHS_MM,
     PenConfigError,
@@ -465,8 +465,21 @@ def convert_hpgl(args, input_path, preview_path=None):
         initial_fill_spacings,
     ).parse_text(source_text)
     document = apply_pen_remap(document)
-    paper = get_paper(args.paper, args.landscape)
-    profile = get_hard_clip(args.window)
+    measured = getattr(args, "measured_calibration", None)
+    if measured:
+        paper = Paper(
+            measured["name"], measured["paper_width_mm"], measured["paper_height_mm"]
+        )
+        profile = HardClipProfile(
+            measured["name"],
+            measured["top_mm"],
+            measured["bottom_mm"],
+            measured["left_mm"],
+            measured["right_mm"],
+        )
+    else:
+        paper = get_paper(args.paper, args.landscape)
+        profile = get_hard_clip(args.window)
     hard = drawable_area(paper, profile, 0)
     safe = drawable_area(paper, profile, args.margin)
     if not args.fit and (args.rotate or args.auto_rotate):

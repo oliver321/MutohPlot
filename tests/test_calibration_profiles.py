@@ -64,6 +64,41 @@ def test_profile_can_be_deleted(tmp_path):
     assert store.snapshot() == {}
 
 
+def test_profile_activation_is_persisted_and_can_be_disabled(tmp_path):
+    path = tmp_path / "calibrations.json"
+    store = CalibrationProfileStore(path)
+    store.put(PROFILE)
+
+    active = store.activate(PROFILE["name"])
+
+    assert active["name"] == PROFILE["name"]
+    assert CalibrationProfileStore(path).active_name() == PROFILE["name"]
+    assert CalibrationProfileStore(path).active_profile()["drawable_width_mm"] == 267
+
+    store.activate(None)
+    assert CalibrationProfileStore(path).active_profile() is None
+
+
+def test_deleting_active_profile_disables_it(tmp_path):
+    store = CalibrationProfileStore(tmp_path / "calibrations.json")
+    store.put(PROFILE)
+    store.activate(PROFILE["name"])
+
+    store.delete(PROFILE["name"])
+
+    assert store.active_name() is None
+
+
+def test_changing_active_profile_requires_reactivation(tmp_path):
+    store = CalibrationProfileStore(tmp_path / "calibrations.json")
+    store.put(PROFILE)
+    store.activate(PROFILE["name"])
+
+    store.put(PROFILE | {"top_mm": 36})
+
+    assert store.active_name() is None
+
+
 def test_invalid_measurements_are_rejected(tmp_path):
     store = CalibrationProfileStore(tmp_path / "calibrations.json")
 

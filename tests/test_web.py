@@ -286,6 +286,15 @@ def test_plot_page_uses_persistent_hardware_instead_of_form_values():
     assert "/api/hardware/test" in PAGE
 
 
+def test_plot_page_can_select_active_calibration_profile():
+    assert 'id="plotcalibration"' in PAGE
+    assert "Standardkalibrierung" in PAGE
+    assert "function setPlotCalibration()" in PAGE
+    assert "$('plotcalibration').onchange" in PAGE
+    assert "await api('/api/calibration/profiles/activate',{name:name||null})" in PAGE
+    assert "requestPreview()" in PAGE
+
+
 def test_queue_uses_confirmed_server_order_and_visible_feedback():
     assert "renderQueue(data.queue)" in PAGE
     assert "Reihenfolge gespeichert" in PAGE

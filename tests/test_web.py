@@ -246,7 +246,7 @@ def test_active_calibration_controls_measured_paper_and_preview():
 def test_web_queues_changed_options_during_active_preview():
     assert "if(previewBusy){previewQueued=true" in PAGE
     assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
-    assert "$('paper').onchange=requestPreview" in PAGE
+    assert "$('paper').onchange=()=>setPlotPaper()" in PAGE
     assert "requestPreview()" in PAGE
     assert "const format=j.paper.toUpperCase()" in PAGE
 
@@ -286,12 +286,14 @@ def test_plot_page_uses_persistent_hardware_instead_of_form_values():
     assert "/api/hardware/test" in PAGE
 
 
-def test_plot_page_can_select_active_calibration_profile():
-    assert 'id="plotcalibration"' in PAGE
-    assert "Standardkalibrierung" in PAGE
-    assert "function setPlotCalibration()" in PAGE
-    assert "$('plotcalibration').onchange" in PAGE
-    assert "await api('/api/calibration/profiles/activate',{name:name||null})" in PAGE
+def test_plot_page_combines_standard_and_calibrated_paper_formats():
+    assert 'id="plotcalibration"' not in PAGE
+    assert "Standardformate" in PAGE
+    assert "Kalibrierte Formate" in PAGE
+    assert "function selectedPaper()" in PAGE
+    assert "function setPlotPaper()" in PAGE
+    assert "$('paper').onchange" in PAGE
+    assert "await api('/api/calibration/profiles/activate',{name})" in PAGE
     assert "requestPreview()" in PAGE
 
 

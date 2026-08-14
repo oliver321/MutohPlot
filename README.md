@@ -151,8 +151,9 @@ A3 bleibt Standard. Die bestätigte Hard-Clip-Korrektur aus v0.0.8 ist unveränd
 
 Die Oberfläche ist nach Aufgaben auf vier Seiten verteilt:
 
-- `/plot` ist die Standardseite für Datei, Kalibrierungsprofil, Vorschau,
-  Warteschlange und Plotsteuerung. Ein Profilwechsel berechnet eine bereits
+- `/plot` ist die Standardseite für Datei, Papierformat, Vorschau,
+  Warteschlange und Plotsteuerung. Standardformate und kalibrierte Formate
+  stehen in einer gemeinsamen Auswahl; ein Formatwechsel berechnet eine bereits
   geladene Vorschau sofort neu.
 - `/hardware` speichert seriellen Port, Baudrate, 8N1, Flusssteuerung und
   Empfangspuffer dauerhaft. Neue Plotaufträge verwenden diese Einstellungen

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mutohplot"
+version = "0.0.9"
+description = "Modern HPGL and SVG toolkit for vintage pen plotters"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Oliver F. and contributors"}]
+dependencies = ["pyserial>=3.5"]
+
+[project.scripts]
+mutohplot = "mutohplot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

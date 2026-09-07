@@ -1,4 +1,4 @@
-# MutohPlot v0.0.21
+# MutohPlot v0.1.0
 
 MutohPlot konvertiert und überträgt HP-GL- und SVG-Zeichnungen für den
 Mutoh XP-500.
@@ -148,6 +148,24 @@ Der vollständige Ablauf für den A3-Hardwaretest steht unter [docs/a3-serial-ha
 A3 bleibt Standard. Die bestätigte Hard-Clip-Korrektur aus v0.0.8 ist unverändert.
 
 ## Lokale Weboberfläche
+
+Die Oberfläche ist nach Aufgaben auf vier Seiten verteilt:
+
+- `/plot` ist die Standardseite für Datei, Papierformat, Vorschau,
+  Warteschlange und Plotsteuerung. Standardformate und kalibrierte Formate
+  stehen in einer gemeinsamen Auswahl; ein Formatwechsel berechnet eine bereits
+  geladene Vorschau sofort neu.
+- `/hardware` speichert seriellen Port, Baudrate, 8N1, Flusssteuerung und
+  Empfangspuffer dauerhaft. Neue Plotaufträge verwenden diese Einstellungen
+  automatisch.
+- `/calibration` enthält Kalibrierungszeichnungen, Messwerte und die ausdrücklich
+  aktivierbaren Kalibrierungsprofile.
+- `/pens` verwaltet die benannten Bestückungsprofile für die acht Stiftplätze.
+
+Die Kopfzeile zeigt auf jeder Seite die aktive Verbindung, Puffergröße, das
+Standard-Stiftprofil und die aktive Kalibrierung. Hardwareänderungen sind während
+eines laufenden Plotauftrags gesperrt. Die bewährte Standardverbindung bleibt
+`19200 Baud`, `8N1` und `XON/XOFF`.
 
 Die Weboberfläche prüft eine HP-GL- oder SVG-Datei, zeigt ihre Vorschau und sendet
 anschließend exakt den geprüften Datenstand. Standardmäßig ist sie nur auf dem

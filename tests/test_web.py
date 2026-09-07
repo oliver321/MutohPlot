@@ -3,8 +3,9 @@ import time
 
 import pytest
 
+from mutohplot.hardware_settings import HardwareSettingsStore
 from mutohplot.job_history import JobHistory
-from mutohplot.web import PAGE, PlotState, WebApplication, _conversion_args
+from mutohplot.web import PAGE, PlotState, WebApplication, _conversion_args, render_page
 from mutohplot.web_profiles import PenProfileStore, standard_profile
 
 SIMPLE_HPGL = "IN;SP1;PA0,0;PD4000,2000;PU;"
@@ -20,6 +21,7 @@ def isolated_job_history(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "MUTOHPLOT_CALIBRATION_PROFILES", str(tmp_path / "calibration-profiles.json")
     )
+    monkeypatch.setenv("MUTOHPLOT_HARDWARE_SETTINGS", str(tmp_path / "hardware.json"))
 
 
 def test_status_exposes_installed_version():
@@ -244,7 +246,7 @@ def test_active_calibration_controls_measured_paper_and_preview():
 def test_web_queues_changed_options_during_active_preview():
     assert "if(previewBusy){previewQueued=true" in PAGE
     assert "if(previewQueued){previewQueued=false;requestPreview()}" in PAGE
-    assert "$('paper').onchange=()=>" in PAGE
+    assert "$('paper').onchange=()=>setPlotPaper()" in PAGE
     assert "requestPreview()" in PAGE
     assert "const format=j.paper.toUpperCase()" in PAGE
 
@@ -255,6 +257,44 @@ def test_web_shows_paper_plot_margin_and_scale_summary_above_preview():
         assert f"<strong>{heading}</strong>" in PAGE
     assert "function renderPlotInfo(j)" in PAGE
     assert "renderPlotControls();renderPlotInfo(j)" in PAGE
+
+
+def test_web_is_split_into_four_navigation_pages():
+    for page, label in (
+        ("plot", "Plotten"),
+        ("hardware", "Hardware"),
+        ("calibration", "Kalibrierung"),
+        ("pens", "Stifte"),
+    ):
+        assert f'href="/{page}" data-nav="{page}">{label}</a>' in PAGE
+        assert f"page-{page}" in PAGE
+    assert 'data-page="__ACTIVE_PAGE__"' in PAGE
+
+
+@pytest.mark.parametrize("page", ["plot", "hardware", "calibration", "pens"])
+def test_render_page_marks_requested_navigation_page(page):
+    html = render_page(page)
+
+    assert f'data-page="{page}"' in html
+    assert "__ACTIVE_PAGE__" not in html
+
+
+def test_plot_page_uses_persistent_hardware_instead_of_form_values():
+    assert "await api('/api/plot',{token:item.token})" in PAGE
+    assert "await api('/api/plot',{token})" in PAGE
+    assert "/api/hardware/save" in PAGE
+    assert "/api/hardware/test" in PAGE
+
+
+def test_plot_page_combines_standard_and_calibrated_paper_formats():
+    assert 'id="plotcalibration"' not in PAGE
+    assert "Standardformate" in PAGE
+    assert "Kalibrierte Formate" in PAGE
+    assert "function selectedPaper()" in PAGE
+    assert "function setPlotPaper()" in PAGE
+    assert "$('paper').onchange" in PAGE
+    assert "await api('/api/calibration/profiles/activate',{name})" in PAGE
+    assert "requestPreview()" in PAGE
 
 
 def test_queue_uses_confirmed_server_order_and_visible_feedback():
@@ -372,6 +412,35 @@ def test_start_sends_prepared_data_with_safe_serial_defaults(tmp_path):
     assert jobs.snapshot()[0]["sent"] == jobs.snapshot()[0]["total"]
     assert app.state.transmission_done.wait(2)
     assert app.queue_snapshot() == []
+
+
+def test_start_uses_persistent_hardware_settings(tmp_path):
+    calls = []
+
+    def sender(data, settings, profile, progress, control=None):
+        calls.append((settings, profile))
+        progress(len(data), len(data))
+
+    hardware = HardwareSettingsStore(tmp_path / "hardware.json")
+    hardware.put(
+        {
+            "port": "/dev/ttyUSB7",
+            "baudrate": 38400,
+            "frame": "8N1",
+            "flow_control": "none",
+            "buffer_profile": "large",
+        }
+    )
+    app = WebApplication(sender=sender, hardware_store=hardware)
+    prepared = app.prepare("test.hpgl", SIMPLE_HPGL, {"optimize": False})
+
+    app.start(prepared["token"])
+
+    assert app.state.transmission_done.wait(2)
+    assert calls[0][0].port == "/dev/ttyUSB7"
+    assert calls[0][0].baudrate == 38400
+    assert calls[0][0].xonxoff is False
+    assert calls[0][1].name == "large"
 
 
 def test_xoff_wait_is_visible_in_web_status():

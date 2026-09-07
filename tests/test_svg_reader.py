@@ -46,6 +46,25 @@ def test_nested_transforms_are_applied_from_element_to_parent():
     ]
 
 
+def test_viewbox_preserves_aspect_ratio_by_default():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="210mm"
+      viewBox="0 0 400 1600"><polyline points="0,0 1200,1200"/></svg>"""
+
+    document = SVGReader().read_text(svg)
+
+    assert document.bounds() == (78.75, 0.0, 236.25, 157.5)
+
+
+def test_viewbox_can_explicitly_stretch_with_preserve_aspect_ratio_none():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" width="210mm" height="210mm"
+      viewBox="0 0 400 1600" preserveAspectRatio="none">
+      <polyline points="0,0 1200,1200"/></svg>"""
+
+    document = SVGReader().read_text(svg)
+
+    assert document.bounds() == (0.0, 0.0, 630.0, 157.5)
+
+
 def test_unsupported_visible_elements_are_reported():
     svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
     <line x1="0" y1="0" x2="10" y2="10"/><text x="20" y="20">Text</text>

@@ -60,6 +60,33 @@ def points(s):
     return [Point(a[i], a[i + 1]) for i in range(0, len(a), 2)]
 
 
+def viewport_transform(width, height, view_box, preserve_aspect_ratio=None):
+    """Map an SVG viewBox into its viewport according to preserveAspectRatio."""
+    min_x, min_y, view_width, view_height = view_box
+    if view_width <= 0 or view_height <= 0:
+        raise ValueError("SVG viewBox requires positive width and height")
+    setting = (preserve_aspect_ratio or "xMidYMid meet").strip()
+    tokens = [token for token in setting.split() if token != "defer"]
+    align = tokens[0] if tokens else "xMidYMid"
+    scale_x, scale_y = width / view_width, height / view_height
+    base = Matrix.translate(-min_x, -min_y)
+    if align == "none":
+        return base.then(Matrix.scale(scale_x, scale_y))
+    if not re.fullmatch(r"x(?:Min|Mid|Max)Y(?:Min|Mid|Max)", align):
+        raise ValueError(f"Unsupported preserveAspectRatio alignment: {align}")
+    mode = tokens[1] if len(tokens) > 1 else "meet"
+    if mode not in {"meet", "slice"}:
+        raise ValueError(f"Unsupported preserveAspectRatio mode: {mode}")
+    scale = min(scale_x, scale_y) if mode == "meet" else max(scale_x, scale_y)
+    remaining_x = width - view_width * scale
+    remaining_y = height - view_height * scale
+    x_factor = {"Min": 0.0, "Mid": 0.5, "Max": 1.0}[align[1:4]]
+    y_factor = {"Min": 0.0, "Mid": 0.5, "Max": 1.0}[align[5:8]]
+    return base.then(Matrix.scale(scale)).then(
+        Matrix.translate(remaining_x * x_factor, remaining_y * y_factor)
+    )
+
+
 class SVGReader:
     def __init__(self, curve_steps=24, pen_count=8, pen_map=None, layer_pens=True):
         self.curve_steps = curve_steps
@@ -85,9 +112,11 @@ class SVGReader:
             h = h or vb[3]
         if w is None or h is None:
             raise ValueError("SVG requires width/height or viewBox")
-        base = Matrix.scale(w / vb[2], h / vb[3]) if len(vb) == 4 else Matrix()
-        if len(vb) == 4:
-            base = Matrix.translate(-vb[0], -vb[1]).then(base)
+        base = (
+            viewport_transform(w, h, vb, root.get("preserveAspectRatio"))
+            if len(vb) == 4
+            else Matrix()
+        )
         self.colors = {}
         doc = PlotDocument(
             metadata={
